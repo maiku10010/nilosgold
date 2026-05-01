@@ -1,0 +1,83 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+}
+
+model Client {
+  clientId   Int      @id @default(autoincrement())
+  clientName String
+  contactNum String
+  balance    Decimal  @default(0.00)
+
+  sale Sales[]
+}
+
+model Sales {
+  invoiceId Int   @id @default(autoincrement())
+  serviceType String
+  price Decimal @default(0.00)
+  status String
+  downpayment Decimal @default(0.00)
+  salesDate DateTime @default(now())
+  
+  clientId Int
+  client Client @relation(fields: [clientId], references: [clientId])
+
+  jobs Job_Cost?
+}
+
+model Inventory {
+  referenceId Int @id @default(autoincrement())
+  goldIn Decimal @default(0.00)
+  goldOut Decimal @default(0.00)
+  stones Decimal @default(0.00)
+  totalGold Decimal @default(0.00)
+}
+
+model Job_Cost {
+  jobCostId Int @id @default(autoincrement())
+  goldUsed Decimal @default(0.00)
+  laborCost Decimal @default(0.00)
+  
+  invoiceId Int @unique
+  sale Sales @relation(fields: [invoiceId], references: [invoiceId] )
+
+  empId Int
+  employee Employee @relation(fields: [empId], references: [empId])
+}
+
+model Employee {
+  empId Int @id @default(autoincrement())
+  empName String
+  workdays Int
+  empRole String
+  rates Decimal @default(0.00)
+
+  jobs Job_Cost[]
+}
+
+model Expenses {
+  expenseId Int @id @default(autoincrement())
+  category String
+  amount Decimal @default(0.00)
+  description String
+  expDate DateTime @default(now())
+}
+
+model Inquiries {
+  inquiryId Int @id @default(autoincrement())
+  category String
+  inqDate DateTime @default(now())
+  quotedPrice Decimal @default(0.00)
+  closed Boolean 
+}
+
+
