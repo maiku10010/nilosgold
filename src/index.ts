@@ -17,6 +17,20 @@ const app = express();
 
 app.use(express.json());
 
+//read operation
+app.get('/sales', async (req: Request, res: Response) => {
+  try {
+    const allSales = await prisma.sales.findMany({include: {client: true}});
+    res.json(allSales);
+  }
+    catch (error) {
+      console.error('Error fetching sales:', error);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
+//create operation
+
 
 
 const PORT = 3000;
