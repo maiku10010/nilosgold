@@ -1,21 +1,25 @@
 import express, { Request, Response } from 'express';
+import { PrismaClient } from '@prisma/client';
+import { Pool } from 'pg'; // <-- 1. Import the new Postgres Driver
+import { PrismaPg } from '@prisma/adapter-pg'; // <-- 2. Import the Prisma Adapter
+import 'dotenv/config';
 
-// 1. Create the Express App (The Waiter)
+// 3. Create a connection pool using your Supabase DIRECT_URL
+const pool = new Pool({ connectionString: process.env.DIRECT_URL });
+
+// 4. Wrap the pool in the Prisma Adapter
+const adapter = new PrismaPg(pool);
+
+// 5. Wake up the Prisma Client and explicitly hand it the adapter!
+const prisma = new PrismaClient({ adapter });
+
 const app = express();
 
-// 2. Allow the app to read JSON "tickets"
 app.use(express.json());
 
-// 3. Create your first "Endpoint" (A menu item)
-app.get('/health', (req: Request, res: Response) => {
-  res.json({ 
-    status: 'success', 
-    message: 'The Goldsmith API is running!' 
-  });
-});
 
-// 4. Tell the app to listen on a specific port
+
 const PORT = 3000;
 app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`Server is running beautifully on http://localhost:${PORT}`);
 });
