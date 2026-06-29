@@ -37,9 +37,11 @@ model Sales {
 
 model Inventory {
   referenceId String   @id @default(uuid())
-  itemName    String
-  quantity    Decimal  @default(0.00) // The current actual stock weight/count
-  unit        String // e.g., "grams", "pieces"
+  goldIn      Decimal  @default(0.00) 
+  goldOut     Decimal  @default(0.00) 
+  scraps      Decimal  @default(0.00) 
+  quantity    Decimal  @default(0.00) 
+  unit        String 
   updatedAt   DateTime @updatedAt
 }
 
@@ -72,7 +74,7 @@ model Expenses {
   expDate     DateTime @default(now())
 }
 
-model Inquiries {
+model Inquiries { 
   inquiryId    String   @id @default(uuid())
   customerName String
   contactInfo  String

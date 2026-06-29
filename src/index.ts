@@ -17,6 +17,23 @@ const app = express();
 
 app.use(express.json());
 
+//create operation for client
+app.post('/client', async (req: Request, res: Response) => {
+  try {
+    const newClient = await prisma.client.create({
+      data: {
+        clientName: req.body.clientName,
+        contactNum: req.body.contactNum,
+        balance: req.body.balance
+      }
+    });
+    res.json(newClient);
+  } catch (error) {
+    console.error('Error creating client:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 //create operation for sales
 app.post('/sales', async (req: Request, res: Response) => {
   try{
@@ -54,20 +71,20 @@ app.post('/inventory', async (req: Request, res: Response) => {
   }
 });
 
-
-//create operation for client
-app.post('/client', async (req: Request, res: Response) => {
+//create operation for job_cost
+app.post('/job_cost', async (req: Request, res: Response) => {
   try {
-    const newClient = await prisma.client.create({
+    const newJobCost = await prisma.job_Cost.create({
       data: {
-        clientName: req.body.clientName,
-        contactNum: req.body.contactNum,
-        balance: req.body.balance
+        goldUsed: req.body.goldUsed,
+        laborCost: req.body.laborCost,
+        invoiceId: req.body.invoiceId,
+        empId: req.body.empId,
       }
     });
-    res.json(newClient);
+    res.json(newJobCost);
   } catch (error) {
-    console.error('Error creating client:', error);
+    console.error('Error creating job cost:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -89,20 +106,19 @@ app.post('/employee', async (req: Request, res: Response) => {
   }
 });
 
-//create operation for job_cost
-app.post('/job_cost', async (req: Request, res: Response) => {
+//create operation for expenses
+app.post('/expenses', async (req: Request, res: Response) => {
   try {
-    const newJobCost = await prisma.job_Cost.create({
+    const newExpense = await prisma.expenses.create({
       data: {
-        goldUsed: req.body.goldUsed,
-        laborCost: req.body.laborCost,
-        invoiceId: req.body.invoiceId,
-        empId: req.body.empId,
+        category: req.body.category,
+        amount: req.body.amount,
+        description: req.body.description
       }
     });
-    res.json(newJobCost);
+    res.json(newExpense);
   } catch (error) {
-    console.error('Error creating job cost:', error);
+    console.error('Error creating expense:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -110,16 +126,20 @@ app.post('/job_cost', async (req: Request, res: Response) => {
 //create operation for inquiries
 app.post('/inquiries', async (req: Request, res: Response) => {
   try {
+    const { customerName, contactInfo, details, category, quotedPrice, status, clientId } = req.body;
+
     const newInquiry = await prisma.inquiries.create({
       data: {
-        customerName: req.body.customerName,
-        contactInfo: req.body.contactInfo,
-        details: req.body.details,
-        category: req.body.category,
-        quotedPrice: req.body.quotedPrice,
-        status: req.body.status
+        customerName,
+        contactInfo,
+        details,
+        category,
+        quotedPrice,
+        status: status || 'Pending',
+        ...(clientId ? { client: { connect: { clientId } } } : {})
       }
     });
+
     res.json(newInquiry);
   } catch (error) {
     console.error('Error creating inquiry:', error);
@@ -162,6 +182,19 @@ app.get('/inventory', async (req: Request, res: Response) => {
       res.status(500).json({ error: 'Internal Server Error' });
     }  
 });
+
+//read operation for job_cost
+app.get('/job_cost', async (req: Request, res: Response) => {
+  try {
+    const allJobCosts = await prisma.job_Cost.findMany({include: {employee: true, client: true}});
+    res.json(allJobCosts);
+  }
+    catch (error) {
+      console.error('Error fetching job costs:', error);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
 //read operation for employee
 app.get('/employee', async (req: Request, res: Response) => { 
   try {
@@ -173,7 +206,32 @@ app.get('/employee', async (req: Request, res: Response) => {
   }
 });
 
+//read operation for expenses
+app.get('/expenses', async (req: Request, res: Response) => {
+  try {
+    const allExpenses = await prisma.expenses.findMany();
+    res.json(allExpenses);
+  } catch (error) {
+    console.error('Error fetching expenses:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 
+//read operation for inquiries
+app.get('/inquiries', async (req: Request, res: Response) => {
+  try {
+    const allInquiries = await prisma.inquiries.findMany({
+  distinct: ['category'],
+  include: {
+    client: true // This fetches ALL inquiry fields AND the relation
+  }
+});
+    res.json(allInquiries);
+  } catch (error) {
+    console.error('Error fetching inquiries:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 //update operation
 app.put('/client/:clientId', async (req: Request, res: Response) => { 
   try {
