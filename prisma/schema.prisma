@@ -4,7 +4,8 @@
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
@@ -37,11 +38,11 @@ model Sales {
 
 model Inventory {
   referenceId String   @id @default(uuid())
-  goldIn      Decimal  @default(0.00) 
-  goldOut     Decimal  @default(0.00) 
-  scraps      Decimal  @default(0.00) 
-  quantity    Decimal  @default(0.00) 
-  unit        String 
+  goldIn      Decimal  @default(0.00)
+  goldOut     Decimal  @default(0.00)
+  scraps      Decimal  @default(0.00)
+  totalGold   Decimal  @default(0.00)
+  unit        String
   updatedAt   DateTime @updatedAt
 }
 
@@ -58,10 +59,12 @@ model Job_Cost {
 }
 
 model Employee {
-  empId   String  @id @default(uuid())
-  empName String
-  empRole String
-  rates   Decimal @default(0.00)
+  empId    String  @id @default(uuid())
+  empName  String
+  userName String  @unique
+  password String
+  empRole  String
+  rates    Decimal @default(0.00)
 
   jobs Job_Cost[]
 }
@@ -74,7 +77,7 @@ model Expenses {
   expDate     DateTime @default(now())
 }
 
-model Inquiries { 
+model Inquiries {
   inquiryId    String   @id @default(uuid())
   customerName String
   contactInfo  String
@@ -84,6 +87,6 @@ model Inquiries {
   status       String   @default("Pending")
   inqDate      DateTime @default(now())
 
-  clientId     String?
-  client       Client? @relation(fields: [clientId], references: [clientId])
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [clientId])
 }
