@@ -28,7 +28,7 @@ model Sales {
   price       Decimal  @default(0.00)
   status      String
   downpayment Decimal  @default(0.00)
-  salesDate   DateTime @default(now())
+  salesDate   DateTime @default(now()) @map("date")
 
   clientId String
   client   Client @relation(fields: [clientId], references: [clientId])
@@ -43,7 +43,7 @@ model Inventory {
   scraps      Decimal  @default(0.00)
   totalGold   Decimal  @default(0.00)
   unit        String
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @updatedAt @map("date")
 }
 
 model Job_Cost {
@@ -74,7 +74,7 @@ model Expenses {
   category    String
   amount      Decimal  @default(0.00)
   description String
-  expDate     DateTime @default(now())
+  expDate     DateTime @default(now()) @map("date")
 }
 
 model Inquiries {
@@ -85,7 +85,7 @@ model Inquiries {
   category     String
   quotedPrice  Decimal  @default(0.00)
   status       String   @default("Pending")
-  inqDate      DateTime @default(now())
+  inqDate      DateTime @default(now()) @map("date")
 
   clientId String?
   client   Client? @relation(fields: [clientId], references: [clientId])
