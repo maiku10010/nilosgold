@@ -1,6 +1,7 @@
 import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import { isPositiveNumber, isValidNonFutureDate } from '../validation';
+import { friendlyId } from '../friendlyId';
 
 const router = Router();
 
@@ -12,6 +13,7 @@ router.post('/', async (req: Request, res: Response) => {
     if (typeof req.body.category !== 'string' || !req.body.category.trim() || typeof req.body.description !== 'string' || !req.body.description.trim() || !isPositiveNumber(req.body.amount)) return res.status(400).json({ error: 'Enter a category, description, and an amount greater than zero.' });
     const newExpense = await prisma.expenses.create({
       data: {
+        expenseId: friendlyId(),
         category: req.body.category.trim(),
         amount: Number(req.body.amount),
         description: req.body.description.trim(),

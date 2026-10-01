@@ -1,5 +1,6 @@
 import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
+import { friendlyId } from '../friendlyId';
 
 const router = Router();
 
@@ -8,6 +9,7 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const newClient = await prisma.client.create({
       data: {
+        clientId: friendlyId(),
         clientName: req.body.clientName,
         contactNum: req.body.contactNum,
         balance: req.body.balance

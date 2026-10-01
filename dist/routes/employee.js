@@ -6,12 +6,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = require("../db");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const friendlyId_1 = require("../friendlyId");
 const router = (0, express_1.Router)();
 //create operation for employee
 router.post('/', async (req, res) => {
     try {
         const newEmployee = await db_1.prisma.employee.create({
             data: {
+                empId: (0, friendlyId_1.friendlyId)(),
                 empName: req.body.empName,
                 userName: req.body.userName,
                 password: await bcryptjs_1.default.hash(String(req.body.password ?? ''), 12),

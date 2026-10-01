@@ -1,6 +1,7 @@
 import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import { isNonNegativeNumber, isValidNonFutureDate } from '../validation';
+import { friendlyId } from '../friendlyId';
 
 const router = Router();
 
@@ -19,7 +20,7 @@ router.post('/', async (req: Request, res: Response) => {
     const totalGold = Number(latest?.totalGold ?? 0) + Number(goldIn) - Number(goldOut) - Number(scraps);
     const newItem = await prisma.inventory.create({
       data: {
-        referenceId: req.body.referenceId || undefined,
+        referenceId: friendlyId(),
         itemName: req.body.itemName || '',
         goldIn: Number(goldIn),
         goldOut: Number(goldOut),

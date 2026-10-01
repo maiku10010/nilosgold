@@ -2,12 +2,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = require("../db");
+const friendlyId_1 = require("../friendlyId");
 const router = (0, express_1.Router)();
 //create operation for client
 router.post('/', async (req, res) => {
     try {
         const newClient = await db_1.prisma.client.create({
             data: {
+                clientId: (0, friendlyId_1.friendlyId)(),
                 clientName: req.body.clientName,
                 contactNum: req.body.contactNum,
                 balance: req.body.balance

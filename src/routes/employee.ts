@@ -1,6 +1,7 @@
 import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import bcrypt from 'bcryptjs';
+import { friendlyId } from '../friendlyId';
 
 const router = Router();
 
@@ -9,6 +10,7 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const newEmployee = await prisma.employee.create({
       data: {
+        empId: friendlyId(),
         empName: req.body.empName,
         userName: req.body.userName,
         password: await bcrypt.hash(String(req.body.password ?? ''), 12),

@@ -2,64 +2,99 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = require("../db");
+const friendlyId_1 = require("../friendlyId");
+const validation_1 = require("../validation");
 const router = (0, express_1.Router)();
-//create operation for inquiries
 router.post('/', async (req, res) => {
     try {
-        const { customerName, contactInfo, details, category, quotedPrice, status, clientId } = req.body;
-        const newInquiry = await db_1.prisma.inquiries.create({
+        const { customerName, contactInfo, details, category, quotedPrice, clientId } = req.body;
+        const date = req.body.date;
+        if (date !== undefined && !(0, validation_1.isValidNonFutureDate)(date))
+            return res.status(400).json({ error: 'Inquiry date must be a valid date no later than today.' });
+        if (typeof customerName !== 'string' || !customerName.trim() || typeof category !== 'string' || !category.trim() || !(0, validation_1.isNonNegativeNumber)(quotedPrice)) {
+            return res.status(400).json({ error: 'Enter a customer, category, and valid quote.' });
+        }
+        const inquiry = await db_1.prisma.inquiries.create({
             data: {
-                customerName,
-                contactInfo,
-                details,
-                category,
-                quotedPrice,
-                status: status || 'Pending',
-                ...(clientId ? { client: { connect: { clientId } } } : {})
-            }
+                inquiryId: (0, friendlyId_1.friendlyId)(),
+                customerName: customerName.trim(),
+                contactInfo: typeof contactInfo === 'string' ? contactInfo.trim() : null,
+                details: typeof details === 'string' ? details.trim() : null,
+                category: category.trim(),
+                quotedPrice: Number(quotedPrice),
+                status: 'PENDING',
+                ...(date ? { inqDate: new Date(`${date}T00:00:00`) } : {}),
+                ...(typeof clientId === 'string' && clientId ? { client: { connect: { clientId } } } : {}),
+            },
+            include: { client: true, jobCost: { include: { sales: true } } },
         });
-        res.json(newInquiry);
+        res.status(201).json(inquiry);
     }
     catch (error) {
         console.error('Error creating inquiry:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
+        res.status(500).json({ error: 'Inquiry could not be saved.' });
     }
 });
-//read operation for inquiries
-router.get('/', async (req, res) => {
+router.get('/', async (_req, res) => {
     try {
-        const allInquiries = await db_1.prisma.inquiries.findMany({
-            include: { client: true }
+        const inquiries = await db_1.prisma.inquiries.findMany({
+            include: { client: true, jobCost: { include: { sales: true } } },
+            orderBy: { inqDate: 'desc' },
         });
-        res.json(allInquiries);
+        res.json(inquiries);
     }
     catch (error) {
         console.error('Error fetching inquiries:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
+        res.status(500).json({ error: 'Inquiries could not be loaded.' });
     }
 });
-//update operation for inquiries
 router.put('/:inquiryId', async (req, res) => {
     try {
-        const targetId = Array.isArray(req.params.inquiryId)
-            ? req.params.inquiryId[0]
-            : req.params.inquiryId;
-        const updatedInquiry = await db_1.prisma.inquiries.update({
-            where: { inquiryId: targetId },
+        const inquiryId = Array.isArray(req.params.inquiryId) ? req.params.inquiryId[0] : req.params.inquiryId;
+        const date = req.body.date;
+        if (date !== undefined && !(0, validation_1.isValidNonFutureDate)(date))
+            return res.status(400).json({ error: 'Inquiry date must be a valid date no later than today.' });
+        if (typeof req.body.customerName !== 'string' || !req.body.customerName.trim() || typeof req.body.category !== 'string' || !req.body.category.trim() || !(0, validation_1.isNonNegativeNumber)(req.body.quotedPrice)) {
+            return res.status(400).json({ error: 'Enter a customer, category, and valid quote.' });
+        }
+        const existing = await db_1.prisma.inquiries.findUnique({ where: { inquiryId }, include: { jobCost: true } });
+        if (!existing)
+            return res.status(404).json({ error: 'Inquiry not found.' });
+        if (existing.status !== 'PENDING' || existing.jobCost)
+            return res.status(409).json({ error: 'Only pending inquiries without job costing can be edited.' });
+        const inquiry = await db_1.prisma.inquiries.update({
+            where: { inquiryId },
             data: {
-                customerName: req.body.customerName,
-                contactInfo: req.body.contactInfo,
-                details: req.body.details,
-                category: req.body.category,
-                quotedPrice: req.body.quotedPrice,
-                status: req.body.status
-            }
+                customerName: req.body.customerName.trim(),
+                contactInfo: typeof req.body.contactInfo === 'string' ? req.body.contactInfo.trim() : null,
+                details: typeof req.body.details === 'string' ? req.body.details.trim() : null,
+                category: req.body.category.trim(),
+                quotedPrice: Number(req.body.quotedPrice),
+                ...(date ? { inqDate: new Date(`${date}T00:00:00`) } : {}),
+            },
+            include: { client: true, jobCost: { include: { sales: true } } },
         });
-        res.json(updatedInquiry);
+        res.json(inquiry);
     }
     catch (error) {
         console.error('Error updating inquiry:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
+        res.status(500).json({ error: 'Inquiry could not be updated.' });
+    }
+});
+router.delete('/:inquiryId', async (req, res) => {
+    try {
+        const inquiryId = Array.isArray(req.params.inquiryId) ? req.params.inquiryId[0] : req.params.inquiryId;
+        const existing = await db_1.prisma.inquiries.findUnique({ where: { inquiryId }, include: { jobCost: true } });
+        if (!existing)
+            return res.status(404).json({ error: 'Inquiry not found.' });
+        if (existing.jobCost)
+            return res.status(409).json({ error: 'Delete the linked job costing before deleting this inquiry.' });
+        await db_1.prisma.inquiries.delete({ where: { inquiryId } });
+        res.json({ message: 'Inquiry deleted.' });
+    }
+    catch (error) {
+        console.error('Error deleting inquiry:', error);
+        res.status(500).json({ error: 'Inquiry could not be deleted.' });
     }
 });
 exports.default = router;

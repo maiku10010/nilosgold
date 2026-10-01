@@ -2,15 +2,24 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = require("../db");
+const validation_1 = require("../validation");
+const friendlyId_1 = require("../friendlyId");
 const router = (0, express_1.Router)();
 //create operation for expenses
 router.post('/', async (req, res) => {
     try {
+        const date = req.body.expDate;
+        if (date !== undefined && !(0, validation_1.isValidNonFutureDate)(date))
+            return res.status(400).json({ error: 'Expense date must be a valid date no later than today.' });
+        if (typeof req.body.category !== 'string' || !req.body.category.trim() || typeof req.body.description !== 'string' || !req.body.description.trim() || !(0, validation_1.isPositiveNumber)(req.body.amount))
+            return res.status(400).json({ error: 'Enter a category, description, and an amount greater than zero.' });
         const newExpense = await db_1.prisma.expenses.create({
             data: {
-                category: req.body.category,
-                amount: req.body.amount,
-                description: req.body.description
+                expenseId: (0, friendlyId_1.friendlyId)(),
+                category: req.body.category.trim(),
+                amount: Number(req.body.amount),
+                description: req.body.description.trim(),
+                ...(date ? { expDate: new Date(date) } : {})
             }
         });
         res.json(newExpense);
@@ -37,12 +46,18 @@ router.put('/:expenseId', async (req, res) => {
         const targetId = Array.isArray(req.params.expenseId)
             ? req.params.expenseId[0]
             : req.params.expenseId;
+        const date = req.body.expDate;
+        if (date !== undefined && !(0, validation_1.isValidNonFutureDate)(date))
+            return res.status(400).json({ error: 'Expense date must be a valid date no later than today.' });
+        if (typeof req.body.category !== 'string' || !req.body.category.trim() || typeof req.body.description !== 'string' || !req.body.description.trim() || !(0, validation_1.isPositiveNumber)(req.body.amount))
+            return res.status(400).json({ error: 'Enter a category, description, and an amount greater than zero.' });
         const updatedExpense = await db_1.prisma.expenses.update({
             where: { expenseId: targetId },
             data: {
-                category: req.body.category,
-                amount: req.body.amount,
-                description: req.body.description
+                category: req.body.category.trim(),
+                amount: Number(req.body.amount),
+                description: req.body.description.trim(),
+                ...(date ? { expDate: new Date(date) } : {})
             }
         });
         res.json(updatedExpense);

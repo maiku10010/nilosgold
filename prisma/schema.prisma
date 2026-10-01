@@ -1,7 +1,6 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// Prisma schema for the existing Supabase database.
+// Keep the mapped table/column names aligned with Supabase; IDs are generated
+// by the API in a readable YYYY-M-D-T### format for new records.
 
 generator client {
   provider = "prisma-client-js"
@@ -11,84 +10,138 @@ datasource db {
   provider = "postgresql"
 }
 
+enum InquiryStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  FINISHED
+}
+
+enum JobStatus {
+  PENDING
+  APPROVED
+  IN_PROGRESS
+  FINISHED
+  CANCELLED
+}
+
+enum SalesStatus {
+  PENDING
+  PAID
+  PARTIAL
+  FINISHED
+  CANCELLED
+}
+
 model Client {
-  clientId   String  @id @default(uuid())
+  clientId   String  @id
   clientName String
-  contactNum String
+  contactNum String?
   balance    Decimal @default(0.00)
 
-  sales     Sales[]
   inquiries Inquiries[]
+  sales     Sales[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("clients")
+}
+
+model Employee {
+  empId    String  @id
+  empName  String
+  empRole  String
+  rates    Decimal
+  userName String  @unique
+  password String
+
+  jobs Job_Cost[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("employees")
+}
+
+model Inquiries {
+  inquiryId    String        @id
+  category     String
+  quotedPrice  Decimal
+  customerName String
+  contactInfo  String?
+  details      String?
+  status       InquiryStatus @default(PENDING)
+  inqDate      DateTime      @default(now()) @map("date")
+
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [clientId], onDelete: SetNull)
+
+  // One inquiry can create at most one costing record.
+  jobCost Job_Cost?
+
+  @@map("inquiries")
+}
+
+model Job_Cost {
+  jobCostId    String    @id
+  goldUsed     Decimal   @default(0.00)
+  stoneCost    Decimal   @default(0.00)
+  laborCost    Decimal   @default(0.00)
+  goldCostPerG Decimal   @default(0.00)
+  status       JobStatus @default(IN_PROGRESS)
+  jobDate      DateTime  @default(now()) @map("date")
+
+  empId    String
+  employee Employee @relation(fields: [empId], references: [empId], onDelete: Restrict)
+
+  inquiryId String?   @unique
+  inquiry   Inquiries? @relation(fields: [inquiryId], references: [inquiryId], onDelete: SetNull)
+
+  // A sale is created when the costing is finished. The sale stores the
+  // invoice number and client relation used by the UI to match name + invoice.
+  sales Sales?
+
+  @@map("job_costs")
 }
 
 model Sales {
-  invoiceId   String   @id @default(uuid())
+  invoiceId   String      @id
   serviceType String
-  price       Decimal  @default(0.00)
-  status      String
-  downpayment Decimal  @default(0.00)
-  salesDate   DateTime @default(now()) @map("date")
+  price       Decimal
+  downpayment Decimal     @default(0.00)
+  status      SalesStatus @default(PAID)
+  salesDate   DateTime    @default(now()) @map("date")
 
   clientId String
-  client   Client @relation(fields: [clientId], references: [clientId])
+  client   Client @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
 
-  jobs Job_Cost?
+  // One sale can be linked to one costing; uniqueness prevents duplicate sales.
+  jobCostId String?   @unique
+  job       Job_Cost? @relation(fields: [jobCostId], references: [jobCostId], onDelete: SetNull)
+
+  @@map("sales")
 }
 
 model Inventory {
-  referenceId String   @id @default(uuid())
-  itemName    String   @default("")
+  referenceId String   @id
+  itemName    String
+  unit        String
   goldIn      Decimal  @default(0.00)
   goldOut     Decimal  @default(0.00)
   scraps      Decimal  @default(0.00)
   totalGold   Decimal  @default(0.00)
-  unit        String
   updatedAt   DateTime @updatedAt @map("date")
-}
 
-model Job_Cost {
-  jobCostId String  @id @default(uuid())
-  goldUsed  Decimal @default(0.00)
-  goldCostPerG Decimal @default(5450.00)
-  stoneCost Decimal @default(0.00)
-  laborCost Decimal @default(0.00)
-
-  invoiceId String @unique
-  sale      Sales  @relation(fields: [invoiceId], references: [invoiceId])
-
-  empId    String
-  employee Employee @relation(fields: [empId], references: [empId])
-}
-
-model Employee {
-  empId    String  @id @default(uuid())
-  empName  String
-  userName String  @unique
-  password String
-  empRole  String
-  rates    Decimal @default(0.00)
-
-  jobs Job_Cost[]
+  @@map("inventory")
 }
 
 model Expenses {
-  expenseId   String   @id @default(uuid())
+  expenseId   String   @id
   category    String
-  amount      Decimal  @default(0.00)
-  description String
+  amount      Decimal
+  description String?
   expDate     DateTime @default(now()) @map("date")
-}
 
-model Inquiries {
-  inquiryId    String   @id @default(uuid())
-  customerName String
-  contactInfo  String
-  details      String
-  category     String
-  quotedPrice  Decimal  @default(0.00)
-  status       String   @default("Pending")
-  inqDate      DateTime @default(now()) @map("date")
-
-  clientId String?
-  client   Client? @relation(fields: [clientId], references: [clientId])
+  @@map("expenses")
 }
