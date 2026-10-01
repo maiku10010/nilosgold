@@ -1,8 +1,10 @@
 import { Request, Response, Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { friendlyId } from '../friendlyId';
 import { isNonNegativeNumber, isPositiveNumber } from '../validation';
 import { readyEmail, sendSystemEmail } from '../services/email';
+import { recalculateInventory } from '../inventoryLedger';
 
 const router = Router();
 const serviceTypes = ['Custom', 'Repair', 'Resize', 'Cleaning'];
@@ -19,6 +21,7 @@ router.post('/', async (req: Request, res: Response) => {
     if (itemName !== undefined && itemName !== null && (typeof itemName !== 'string' || itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
     if (requestedDeadline !== undefined && requestedDeadline !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(String(requestedDeadline)) || Number.isNaN(new Date(`${requestedDeadline}T00:00:00Z`).getTime()))) return res.status(400).json({ error: 'Enter a valid delivery date.' });
     const goldUsed = Number(req.body.goldUsed);
+    const goldScrap = Number(req.body.goldScrap ?? 0);
     const goldCostPerG = Number(req.body.goldCostPerG);
     const stoneCost = Number(req.body.stoneCost ?? 0);
     const laborCost = Number(req.body.laborCost);
@@ -28,7 +31,7 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Choose a pending inquiry and confirm the client name.' });
     }
     if (!serviceTypes.includes(serviceType)) return res.status(400).json({ error: 'Choose a valid service type.' });
-    if (![goldUsed, stoneCost, laborCost].every(isNonNegativeNumber) || !isPositiveNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
+    if (![goldUsed, goldScrap, stoneCost, laborCost].every(isNonNegativeNumber) || !isPositiveNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
       return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
     }
 
@@ -76,6 +79,7 @@ router.post('/', async (req: Request, res: Response) => {
           itemName: typeof itemName === 'string' && itemName.trim() ? itemName.trim() : null,
           ...(requestedDeadline ? { deadline: new Date(`${requestedDeadline}T00:00:00Z`) } : {}),
           goldUsed,
+          goldScrap,
           goldCostPerG,
           stoneCost,
           laborCost,
@@ -84,6 +88,14 @@ router.post('/', async (req: Request, res: Response) => {
           inquiry: { connect: { inquiryId } },
         },
       });
+      if (goldUsed + goldScrap > 0) {
+        await tx.inventory.create({ data: {
+          referenceId: friendlyId(), itemName: createdJob.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD',
+          quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap,
+          unitPrice: goldCostPerG, jobCostId: createdJob.jobCostId,
+        } });
+        await recalculateInventory(tx);
+      }
       const sale = await tx.sales.create({
         data: {
           invoiceId: friendlyId(),
@@ -101,11 +113,11 @@ router.post('/', async (req: Request, res: Response) => {
       });
 
       return tx.job_Cost.findUniqueOrThrow({ where: { jobCostId: createdJob.jobCostId }, include: includeJob });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     res.status(201).json(jobCost);
   } catch (error) {
-    const statusCode = Number((error as { statusCode?: number })?.statusCode);
+    const statusCode = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 0);
     if (statusCode) return res.status(statusCode).json({ error: (error as Error).message });
     console.error('Error creating job costing:', error);
     res.status(500).json({ error: 'Job costing could not be saved.' });
@@ -131,7 +143,7 @@ router.post('/:jobCostId/approve', async (req: Request, res: Response) => {
       if (current.status !== 'PENDING' || !current.sales || current.sales.deletedAt) throw Object.assign(new Error('Only a pending costing with an active invoice can be approved.'), { statusCode: 409 });
       await tx.job_Cost.update({ where: { jobCostId }, data: { status: 'APPROVED' } });
       return tx.job_Cost.findUniqueOrThrow({ where: { jobCostId }, include: includeJob });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     res.json(approved);
   } catch (error) {
     const status = Number((error as { statusCode?: number }).statusCode);
@@ -167,6 +179,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
   try {
     const jobCostId = Array.isArray(req.params.jobCostId) ? req.params.jobCostId[0] : req.params.jobCostId;
     const goldUsed = Number(req.body.goldUsed);
+    const goldScrap = Number(req.body.goldScrap ?? 0);
     const goldCostPerG = Number(req.body.goldCostPerG);
     const stoneCost = Number(req.body.stoneCost ?? 0);
     const laborCost = Number(req.body.laborCost);
@@ -174,7 +187,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
     const requestedDeadline = req.body.deadline ?? req.body.deliveryDate;
     if (req.body.itemName !== undefined && req.body.itemName !== null && (typeof req.body.itemName !== 'string' || req.body.itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
     if (requestedDeadline !== undefined && requestedDeadline !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(String(requestedDeadline)) || Number.isNaN(new Date(`${requestedDeadline}T00:00:00Z`).getTime()))) return res.status(400).json({ error: 'Enter a valid delivery date.' });
-    if (![goldUsed, stoneCost, laborCost].every(isNonNegativeNumber) || !isPositiveNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
+    if (![goldUsed, goldScrap, stoneCost, laborCost].every(isNonNegativeNumber) || !isPositiveNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
       return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
     }
     if (typeof req.body.invoiceId !== 'string' || typeof req.body.clientName !== 'string') {
@@ -185,6 +198,20 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       const existing = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { sales: { include: { client: true } } } });
       if (!existing) throw Object.assign(new Error('Job costing record not found.'), { statusCode: 404 });
       if (!existing.sales) throw Object.assign(new Error('This costing has no linked invoice.'), { statusCode: 409 });
+      const movement = await tx.inventory.findUnique({ where: { jobCostId } });
+      if ((goldUsed + goldScrap > 0) || movement) {
+        if (movement) await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: {
+          itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : existing.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD', quantityIn: 0,
+          quantityOut: goldUsed, quantityLoss: goldScrap, goldIn: 0, goldOut: goldUsed, scraps: goldScrap,
+          unitPrice: goldCostPerG, updatedAt: new Date(), deletedAt: goldUsed + goldScrap > 0 ? null : new Date(),
+        } });
+        else await tx.inventory.create({ data: {
+          referenceId: friendlyId(), itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : existing.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD',
+          quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap,
+          unitPrice: goldCostPerG, jobCostId,
+        } });
+        await recalculateInventory(tx);
+      }
       const namesMatch = existing.sales.client.clientName.trim().toLocaleLowerCase() === req.body.clientName.trim().toLocaleLowerCase();
       if (existing.sales.invoiceId !== req.body.invoiceId || !namesMatch) {
         throw Object.assign(new Error('The client name and invoice number must match this costing.'), { statusCode: 409 });
@@ -198,6 +225,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
         where: { jobCostId },
         data: {
           goldUsed,
+          goldScrap,
           goldCostPerG,
           stoneCost,
           laborCost,
@@ -218,10 +246,10 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
         });
       }
       return tx.job_Cost.findUniqueOrThrow({ where: { jobCostId }, include: includeJob });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     res.json(updated);
   } catch (error) {
-    const statusCode = Number((error as { statusCode?: number })?.statusCode);
+    const statusCode = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 0);
     if (statusCode) return res.status(statusCode).json({ error: (error as Error).message });
     console.error('Error updating job costing:', error);
     res.status(500).json({ error: 'Job costing could not be updated.' });
@@ -243,11 +271,16 @@ router.delete('/:jobCostId', async (req: Request, res: Response) => {
         } });
       }
       await tx.job_Cost.update({ where: { jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
+      const movement = await tx.inventory.findUnique({ where: { jobCostId } });
+      if (movement) {
+        await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: { deletedAt: new Date() } });
+        await recalculateInventory(tx);
+      }
       if (job.inquiryId) await tx.inquiries.update({ where: { inquiryId: job.inquiryId }, data: { status: 'PENDING' } });
     });
     res.json({ message: 'Job costing and its linked invoice were removed; the inquiry is pending again.' });
   } catch (error) {
-    const statusCode = Number((error as { statusCode?: number })?.statusCode);
+    const statusCode = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 0);
     if (statusCode) return res.status(statusCode).json({ error: (error as Error).message });
     console.error('Error deleting job costing:', error);
     res.status(500).json({ error: 'Job costing could not be deleted.' });

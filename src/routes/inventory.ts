@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { isNonNegativeNumber, isValidNonFutureDate } from '../validation';
 import { friendlyId } from '../friendlyId';
+import { recalculateInventory, syncInventoryExpense } from '../inventoryLedger';
 
 const router = Router();
 const categories = ['GOLD', 'SILVER', 'GEMSTONES', 'BOXES', 'PACKAGING', 'FINDINGS', 'TOOLS'] as const;
@@ -10,10 +11,7 @@ const unitsByCategory: Record<string, string[]> = {
   GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'],
   BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'],
 };
-type Movement = { category: string; itemName: string; unit: string; quantityIn: number; quantityOut: number; quantityLoss: number; date?: Date };
-const stockKey = (row: { category: string; itemName: string; unit: string }) => row.category === 'GOLD'
-  ? `GOLD\u0000${row.unit}` : `${row.category}\u0000${row.unit}\u0000${row.itemName.trim().toLocaleLowerCase()}`;
-
+type Movement = { category: string; itemName: string; unit: string; quantityIn: number; quantityOut: number; quantityLoss: number; unitPrice: number; date?: Date };
 function parseMovement(body: any, existing?: { category: string; itemName: string; unit: string }): Movement | string {
   const category = String(body.category ?? existing?.category ?? 'GOLD').trim().toUpperCase();
   const itemName = String(body.itemName ?? existing?.itemName ?? '').trim();
@@ -21,25 +19,14 @@ function parseMovement(body: any, existing?: { category: string; itemName: strin
   const quantityIn = body.quantityIn ?? body.goldIn ?? 0;
   const quantityOut = body.quantityOut ?? body.goldOut ?? 0;
   const quantityLoss = body.quantityLoss ?? body.scraps ?? body.scrap ?? 0;
+  const unitPrice = body.unitPrice ?? 0;
   if (!categories.includes(category as typeof categories[number])) return 'Choose a supported inventory category.';
   if (!unitsByCategory[category]?.includes(unit)) return `Choose a supported unit for ${category.toLowerCase()}.`;
   if (!itemName) return 'Enter an item description.';
   if (![quantityIn, quantityOut, quantityLoss].every(isNonNegativeNumber) || Number(quantityIn) + Number(quantityOut) + Number(quantityLoss) <= 0) return 'Enter a positive quantity for at least one movement.';
+  if (!isNonNegativeNumber(unitPrice)) return 'Enter a valid non-negative unit price.';
   if (body.date !== undefined && !isValidNonFutureDate(body.date)) return 'Inventory date must be a valid date no later than today.';
-  return { category, itemName, unit, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), ...(body.date ? { date: new Date(body.date) } : {}) };
-}
-
-async function recalculateInventory(tx: Prisma.TransactionClient): Promise<void> {
-  const rows = await tx.inventory.findMany({ where: { deletedAt: null }, orderBy: [{ updatedAt: 'asc' }, { referenceId: 'asc' }] });
-  const balances = new Map<string, number>();
-  for (const row of rows) {
-    const key = stockKey(row);
-    const balance = (balances.get(key) ?? 0) + Number(row.quantityIn) - Number(row.quantityOut) - Number(row.quantityLoss);
-    if (balance < -0.000001) throw new Error(`This movement would make ${row.category.toLowerCase()} stock negative at ${row.referenceId}.`);
-    const nextBalance = Math.max(0, balance);
-    balances.set(key, nextBalance);
-    await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { balance: nextBalance, totalGold: row.category === 'GOLD' ? nextBalance : 0 } });
-  }
+  return { category, itemName, unit, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
 }
 
 router.post('/', async (req: Request, res: Response) => {
@@ -50,18 +37,21 @@ router.post('/', async (req: Request, res: Response) => {
       const created = await tx.inventory.create({ data: {
         referenceId: friendlyId(), itemName: parsed.itemName, unit: parsed.unit, category: parsed.category,
         quantityIn: parsed.quantityIn, quantityOut: parsed.quantityOut, quantityLoss: parsed.quantityLoss,
+        unitPrice: parsed.unitPrice,
         goldIn: parsed.category === 'GOLD' ? parsed.quantityIn : 0,
         goldOut: parsed.category === 'GOLD' ? parsed.quantityOut : 0,
         scraps: parsed.category === 'GOLD' ? parsed.quantityLoss : 0,
         updatedAt: parsed.date ?? new Date(),
       } });
+      await syncInventoryExpense(tx, { ...created, unitPrice: parsed.unitPrice });
       await recalculateInventory(tx);
       return tx.inventory.findUnique({ where: { referenceId: created.referenceId } });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     res.status(201).json(saved);
   } catch (error) {
     console.error('Error creating inventory item:', error);
-    res.status(400).json({ error: error instanceof Error ? error.message : 'Inventory item could not be saved.' });
+    const status = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 400);
+    res.status(status).json({ error: error instanceof Error ? error.message : 'Inventory item could not be saved.' });
   }
 });
 
@@ -85,16 +75,18 @@ router.put('/:referenceId', async (req: Request, res: Response) => {
       await tx.inventory.update({ where: { referenceId: targetId }, data: {
         itemName: parsed.itemName, unit: parsed.unit, category: parsed.category,
         quantityIn: parsed.quantityIn, quantityOut: parsed.quantityOut, quantityLoss: parsed.quantityLoss,
+        unitPrice: parsed.unitPrice,
         goldIn: parsed.category === 'GOLD' ? parsed.quantityIn : 0,
         goldOut: parsed.category === 'GOLD' ? parsed.quantityOut : 0,
         scraps: parsed.category === 'GOLD' ? parsed.quantityLoss : 0,
         updatedAt: parsed.date ?? new Date(),
       } });
+      await syncInventoryExpense(tx, { referenceId: targetId, category: parsed.category, itemName: parsed.itemName, unit: parsed.unit, quantityIn: parsed.quantityIn, unitPrice: parsed.unitPrice, updatedAt: parsed.date ?? new Date() });
       await recalculateInventory(tx);
       return tx.inventory.findUnique({ where: { referenceId: targetId } });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     res.json(saved);
-  } catch (error) { console.error('Error updating inventory item:', error); res.status(400).json({ error: error instanceof Error ? error.message : 'Inventory item could not be updated.' }); }
+  } catch (error) { console.error('Error updating inventory item:', error); const status = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 400); res.status(status).json({ error: error instanceof Error ? error.message : 'Inventory item could not be updated.' }); }
 });
 
 router.delete('/:referenceId', async (req: Request, res: Response) => {
@@ -103,12 +95,14 @@ router.delete('/:referenceId', async (req: Request, res: Response) => {
     const deleted = await prisma.$transaction(async tx => {
       const result = await tx.inventory.updateMany({ where: { referenceId: targetId, deletedAt: null }, data: { deletedAt: new Date() } });
       if (!result.count) return 0;
+      const movement = await tx.inventory.findUnique({ where: { referenceId: targetId } });
+      if (movement) await syncInventoryExpense(tx, { ...movement, unitPrice: movement.unitPrice, deletedAt: new Date() });
       await recalculateInventory(tx);
       return result.count;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     if (!deleted) return res.status(404).json({ error: 'Inventory entry not found or already archived.' });
     res.json({ message: 'Inventory item successfully deleted' });
-  } catch (error) { console.error('Error deleting inventory item:', error); res.status(400).json({ error: error instanceof Error ? error.message : 'Inventory item could not be deleted.' }); }
+  } catch (error) { console.error('Error deleting inventory item:', error); const status = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 400); res.status(status).json({ error: error instanceof Error ? error.message : 'Inventory item could not be deleted.' }); }
 });
 
 export default router;

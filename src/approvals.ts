@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { prisma } from './db';
 import { isAdminRole } from './auth';
 import { writeSystemLog } from './audit';
+import { recalculateInventory, syncInventoryExpense } from './inventoryLedger';
+import { friendlyId } from './friendlyId';
 
 type Entity = 'SALE' | 'JOB_COST' | 'INQUIRY' | 'EXPENSE' | 'INVENTORY' | 'CLIENT';
 type Action = 'UPDATE' | 'DELETE';
@@ -15,11 +17,11 @@ function requestSpec(req: Request): Spec | null {
   const [resource, id] = segments;
   const resourceSpecs: Record<string, { entity: Entity; allowed: string[] }> = {
     sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'downpayment', 'salesDate', 'date', 'clientName', 'contactNum'] },
-    'job-cost': { entity: 'JOB_COST', allowed: ['goldUsed', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
-    job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
+    'job-cost': { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
+    job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
     inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'date', 'inqDate'] },
     expenses: { entity: 'EXPENSE', allowed: ['category', 'amount', 'description', 'expDate', 'date'] },
-    inventory: { entity: 'INVENTORY', allowed: ['itemName', 'category', 'quantityIn', 'quantityOut', 'quantityLoss', 'goldIn', 'goldOut', 'scraps', 'scrap', 'totalGold', 'balance', 'unit', 'date', 'updatedAt'] },
+    inventory: { entity: 'INVENTORY', allowed: ['itemName', 'category', 'quantityIn', 'quantityOut', 'quantityLoss', 'goldIn', 'goldOut', 'scraps', 'scrap', 'totalGold', 'balance', 'unit', 'unitPrice', 'date', 'updatedAt'] },
     // Client balance is derived from invoices and must never be manually edited.
     client: { entity: 'CLIENT', allowed: ['clientName', 'contactNum', 'email'] },
   };
@@ -42,7 +44,7 @@ async function findCurrent(entity: Entity, id: string): Promise<any> {
   }
 }
 
-const numericFields = new Set(['price', 'downpayment', 'goldUsed', 'goldCostPerG', 'stoneCost', 'laborCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'totalGold', 'quantityIn', 'quantityOut', 'quantityLoss']);
+const numericFields = new Set(['price', 'downpayment', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'totalGold', 'quantityIn', 'quantityOut', 'quantityLoss', 'unitPrice']);
 const positiveFields = new Set(['price', 'goldCostPerG', 'sellingPrice', 'amount']);
 const nullableStringFields = new Set(['contactInfo', 'email', 'details', 'description', 'contactNum']);
 function normalizedChanges(body: Record<string, unknown>, spec: Spec): Record<string, unknown> {
@@ -131,18 +133,6 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
   }
 }
 
-async function recalculateInventory(tx: Prisma.TransactionClient): Promise<void> {
-  const rows = await tx.inventory.findMany({ where: { deletedAt: null }, orderBy: [{ updatedAt: 'asc' }, { referenceId: 'asc' }] });
-  const balances = new Map<string, number>();
-  for (const row of rows) {
-    const key = row.category === 'GOLD' ? `GOLD:${row.unit}` : `${row.category}:${row.unit}:${row.itemName.trim().toLowerCase()}`;
-    const balance = (balances.get(key) ?? 0) + Number(row.quantityIn) - Number(row.quantityOut) - Number(row.quantityLoss);
-    if (balance < -0.000001) throw new Error(`Inventory change would make ${row.category.toLowerCase()} stock negative at ${row.referenceId}.`);
-    const next = Math.max(0, balance); balances.set(key, next);
-    await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { balance: next, totalGold: row.category === 'GOLD' ? next : 0 } });
-  }
-}
-
 async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: Record<string, unknown>): Promise<void> {
   const id = request.entityId as string;
   const date = (key: string) => changes[key] ? new Date(String(changes[key])) : undefined;
@@ -171,6 +161,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       const { sellingPrice, ...jobFields } = changes;
       await tx.job_Cost.update({ where: { jobCostId: id }, data: {
         ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed as number } : {}),
+        ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap as number } : {}),
         ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: jobFields.goldCostPerG as number } : {}),
         ...(jobFields.stoneCost !== undefined ? { stoneCost: jobFields.stoneCost as number } : {}),
         ...(jobFields.laborCost !== undefined ? { laborCost: jobFields.laborCost as number } : {}),
@@ -178,6 +169,12 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
         ...(jobFields.deadline !== undefined || jobFields.deliveryDate !== undefined ? { deadline: date('deadline') ?? date('deliveryDate') } : {}),
         ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
       } });
+      const movement = await tx.inventory.findUnique({ where: { jobCostId: id } });
+      const goldUsed = Number(jobFields.goldUsed ?? job.goldUsed);
+      const goldScrap = Number(jobFields.goldScrap ?? job.goldScrap);
+      if (movement) await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: { itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap, unitPrice: Number(jobFields.goldCostPerG ?? job.goldCostPerG), deletedAt: goldUsed + goldScrap > 0 ? null : new Date() } });
+      else if (goldUsed + goldScrap > 0) await tx.inventory.create({ data: { referenceId: friendlyId(), jobCostId: id, itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), unit: 'grams', category: 'GOLD', quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap, unitPrice: Number(jobFields.goldCostPerG ?? job.goldCostPerG) } });
+      if (movement || goldUsed + goldScrap > 0) await recalculateInventory(tx);
       if (sellingPrice !== undefined && job.sales) await tx.sales.update({ where: { invoiceId: job.sales.invoiceId }, data: { price: sellingPrice as number } });
       return;
     }
@@ -207,12 +204,16 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
         ...(changes.itemName !== undefined ? { itemName: changes.itemName as string } : {}),
         category,
         quantityIn, quantityOut, quantityLoss,
+        ...(changes.unitPrice !== undefined ? { unitPrice: changes.unitPrice as number } : {}),
         goldIn: category === 'GOLD' ? quantityIn : 0,
         goldOut: category === 'GOLD' ? quantityOut : 0,
         scraps: category === 'GOLD' ? quantityLoss : 0,
         ...(changes.unit !== undefined ? { unit: changes.unit as string } : {}),
         updatedAt: date('updatedAt') ?? date('date') ?? new Date(),
-      } }); await recalculateInventory(tx); return;
+      } });
+      const updated = await tx.inventory.findUniqueOrThrow({ where: { referenceId: id } });
+      await syncInventoryExpense(tx, { ...updated, unitPrice: updated.unitPrice });
+      await recalculateInventory(tx); return;
     }
     case 'CLIENT': await tx.client.update({ where: { clientId: id }, data: {
       ...(changes.clientName !== undefined ? { clientName: changes.clientName as string } : {}),
@@ -242,6 +243,8 @@ async function applyDelete(tx: Prisma.TransactionClient, request: any): Promise<
       const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: true } });
       if (!job) throw new Error('Job costing is no longer active.');
       await tx.job_Cost.update({ where: { jobCostId: id }, data: { deletedAt: now, inquiryId: null } });
+      const movement = await tx.inventory.findUnique({ where: { jobCostId: id } });
+      if (movement) { await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: { deletedAt: now } }); await recalculateInventory(tx); }
       if (job.sales) await tx.sales.update({ where: { invoiceId: job.sales.invoiceId }, data: { deletedAt: now } });
       if (job.inquiryId) await tx.inquiries.update({ where: { inquiryId: job.inquiryId }, data: { status: 'PENDING' } });
       return;
@@ -253,7 +256,12 @@ async function applyDelete(tx: Prisma.TransactionClient, request: any): Promise<
       await tx.inquiries.update({ where: { inquiryId: id }, data: { deletedAt: now } }); return;
     }
     case 'EXPENSE': await tx.expenses.update({ where: { expenseId: id }, data: { deletedAt: now } }); return;
-    case 'INVENTORY': await tx.inventory.update({ where: { referenceId: id }, data: { deletedAt: now } }); await recalculateInventory(tx); return;
+    case 'INVENTORY': {
+      await tx.inventory.update({ where: { referenceId: id }, data: { deletedAt: now } });
+      const movement = await tx.inventory.findUniqueOrThrow({ where: { referenceId: id } });
+      await syncInventoryExpense(tx, { ...movement, unitPrice: movement.unitPrice, deletedAt: now });
+      await recalculateInventory(tx); return;
+    }
     case 'CLIENT': await tx.client.update({ where: { clientId: id }, data: { deletedAt: now } }); return;
   }
 }

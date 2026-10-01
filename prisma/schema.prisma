@@ -104,6 +104,7 @@ model Job_Cost {
   itemName        String?   @map("item_name")
   deadline        DateTime? @map("delivery_date")
   goldUsed        Decimal   @default(0.00)
+  goldScrap       Decimal   @default(0.00) @map("gold_scrap")
   stoneCost       Decimal   @default(0.00)
   laborCost       Decimal   @default(0.00)
   goldCostPerG    Decimal   @default(0.00)
@@ -121,6 +122,7 @@ model Job_Cost {
   // A sale is created when the costing is finished. The sale stores the
   // invoice number and client relation used by the UI to match name + invoice.
   sales Sales?
+  inventoryMovement Inventory? @relation("JobCostInventoryMovement")
 
   @@map("job_costs")
 }
@@ -149,6 +151,7 @@ model Inventory {
   referenceId String    @id
   itemName    String
   unit        String
+  unitPrice   Decimal   @default(0.00)
   category    String    @default("GOLD")
   quantityIn  Decimal   @default(0.00)
   quantityOut Decimal   @default(0.00)
@@ -161,6 +164,10 @@ model Inventory {
   updatedAt   DateTime  @default(now()) @map("date")
   deletedAt   DateTime?
 
+  costExpense Expenses? @relation("InventoryCostExpense")
+  jobCostId   String?   @unique
+  jobCost     Job_Cost? @relation("JobCostInventoryMovement", fields: [jobCostId], references: [jobCostId], onDelete: SetNull)
+
   @@map("inventory")
 }
 
@@ -171,6 +178,8 @@ model Expenses {
   description String?
   expDate     DateTime  @default(now()) @map("date")
   deletedAt   DateTime?
+  inventoryReferenceId String? @unique
+  inventory Inventory? @relation("InventoryCostExpense", fields: [inventoryReferenceId], references: [referenceId], onDelete: SetNull)
 
   @@map("expenses")
 }
