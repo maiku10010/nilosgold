@@ -27,6 +27,7 @@ app.use('/employee', employee_1.default);
 app.use('/expenses', expenses_1.default);
 app.use('/inventory', inventory_1.default);
 app.use('/job_costing', job_costing_1.default);
+app.use('/job-cost', job_costing_1.default);
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', message: 'Goldsmith Master Control API is running' });

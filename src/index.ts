@@ -26,6 +26,7 @@ app.use('/employee', employeeRouter);
 app.use('/expenses', expensesRouter);
 app.use('/inventory', inventoryRouter);
 app.use('/job_costing', jobCostingRouter);
+app.use('/job-cost', jobCostingRouter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
