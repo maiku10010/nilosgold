@@ -55,6 +55,14 @@ app.use('/inventory', inventoryRouter);
 app.use('/job_costing', jobCostingRouter);
 app.use('/job-cost', jobCostingRouter);
 
+// Keep unexpected API failures machine-readable for the frontend.
+app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('Unhandled API error:', error);
+  if (res.headersSent) return;
+  const message = error instanceof Error ? error.message : 'An unexpected server error occurred.';
+  res.status(500).json({ error: message });
+});
+
 const PORT = process.env.PORT || 3000;
 
 // Vercel imports this handler as a serverless function; local runs still listen on PORT.
