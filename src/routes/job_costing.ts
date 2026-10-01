@@ -1,11 +1,13 @@
 import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
+import { isNonNegativeNumber, isPositiveNumber } from '../validation';
 
 const router = Router();
 
 //create operation for job_cost
 router.post('/', async (req: Request, res: Response) => {
   try {
+    if (![req.body.goldUsed, req.body.stoneCost ?? 0, req.body.laborCost].every(isNonNegativeNumber) || !isPositiveNumber(req.body.sellingPrice) || !isPositiveNumber(req.body.goldCostPerG ?? 5450)) return res.status(400).json({ error: 'Enter non-negative job costs and a selling price greater than zero.' });
     const newJobCost = await prisma.$transaction(async (tx) => {
       if (req.body.sellingPrice !== undefined) {
         const sale = await tx.sales.findUniqueOrThrow({ where: { invoiceId: req.body.invoiceId }, select: { downpayment: true } });
@@ -55,6 +57,7 @@ router.get('/', async (req: Request, res: Response) => {
 //update operation for job_cost
 router.put('/:jobCostId', async (req: Request, res: Response) => {
   try {
+    if (![req.body.goldUsed, req.body.stoneCost ?? 0, req.body.laborCost].every(isNonNegativeNumber) || !isPositiveNumber(req.body.sellingPrice) || !isPositiveNumber(req.body.goldCostPerG)) return res.status(400).json({ error: 'Enter non-negative job costs and a selling price greater than zero.' });
     const targetId = Array.isArray(req.params.jobCostId)
       ? req.params.jobCostId[0]
       : req.params.jobCostId;

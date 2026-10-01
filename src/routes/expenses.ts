@@ -1,17 +1,21 @@
 import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
+import { isPositiveNumber, isValidNonFutureDate } from '../validation';
 
 const router = Router();
 
 //create operation for expenses
 router.post('/', async (req: Request, res: Response) => {
   try {
+    const date = req.body.expDate;
+    if (date !== undefined && !isValidNonFutureDate(date)) return res.status(400).json({ error: 'Expense date must be a valid date no later than today.' });
+    if (typeof req.body.category !== 'string' || !req.body.category.trim() || typeof req.body.description !== 'string' || !req.body.description.trim() || !isPositiveNumber(req.body.amount)) return res.status(400).json({ error: 'Enter a category, description, and an amount greater than zero.' });
     const newExpense = await prisma.expenses.create({
       data: {
-        category: req.body.category,
-        amount: req.body.amount,
-        description: req.body.description,
-        ...(req.body.expDate ? { expDate: new Date(req.body.expDate) } : {})
+        category: req.body.category.trim(),
+        amount: Number(req.body.amount),
+        description: req.body.description.trim(),
+        ...(date ? { expDate: new Date(date) } : {})
       }
     });
     res.json(newExpense);
@@ -38,13 +42,16 @@ router.put('/:expenseId', async (req: Request, res: Response) => {
     const targetId = Array.isArray(req.params.expenseId)
       ? req.params.expenseId[0]
       : req.params.expenseId;
+    const date = req.body.expDate;
+    if (date !== undefined && !isValidNonFutureDate(date)) return res.status(400).json({ error: 'Expense date must be a valid date no later than today.' });
+    if (typeof req.body.category !== 'string' || !req.body.category.trim() || typeof req.body.description !== 'string' || !req.body.description.trim() || !isPositiveNumber(req.body.amount)) return res.status(400).json({ error: 'Enter a category, description, and an amount greater than zero.' });
     const updatedExpense = await prisma.expenses.update({
       where: { expenseId: targetId },
       data: {
-        category: req.body.category,
-        amount: req.body.amount,
-        description: req.body.description,
-        ...(req.body.expDate ? { expDate: new Date(req.body.expDate) } : {})
+        category: req.body.category.trim(),
+        amount: Number(req.body.amount),
+        description: req.body.description.trim(),
+        ...(date ? { expDate: new Date(date) } : {})
       }
     });
     res.json(updatedExpense);

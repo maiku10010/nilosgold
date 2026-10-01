@@ -1,5 +1,6 @@
 import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
+import { isNonNegativeNumber, isPositiveNumber, isValidNonFutureDate } from '../validation';
 
 const router = Router();
 
@@ -7,17 +8,22 @@ const router = Router();
 router.post('/', async (req: Request, res: Response) => {
   try {
     const { clientName, contactNum, ...sale } = req.body;
-    if (!clientName || !contactNum) return res.status(400).json({ error: 'Client name and contact number are required.' });
+    const date = req.body.salesDate ?? req.body.date;
+    const downpayment = req.body.downpayment ?? 0;
+    if (typeof clientName !== 'string' || !clientName.trim() || typeof contactNum !== 'string' || !contactNum.trim()) return res.status(400).json({ error: 'Client name and contact number are required.' });
+    if (!isPositiveNumber(sale.price) || !isNonNegativeNumber(downpayment) || Number(downpayment) > Number(sale.price)) return res.status(400).json({ error: 'Enter a valid price and a downpayment no greater than the total price.' });
+    if (date !== undefined && !isValidNonFutureDate(date)) return res.status(400).json({ error: 'Sale date must be a valid date no later than today.' });
+    if (!['Custom', 'Repair', 'Resize', 'Cleaning'].includes(req.body.serviceType) || !['Ongoing', 'Paid', 'Released'].includes(req.body.status)) return res.status(400).json({ error: 'Choose a valid service type and status.' });
     const newSales = await prisma.$transaction(async (tx) => {
-      const client = await tx.client.create({ data: { clientName, contactNum, balance: Math.max(0, Number(sale.price || 0) - Number(sale.downpayment || 0)) } });
+      const client = await tx.client.create({ data: { clientName: clientName.trim(), contactNum: contactNum.trim(), balance: Math.max(0, Number(sale.price) - Number(downpayment)) } });
       return tx.sales.create({
       data: {
         ...(typeof sale.invoiceId === 'string' && sale.invoiceId.trim() ? { invoiceId: sale.invoiceId.trim() } : {}),
         serviceType: req.body.serviceType,
         price: req.body.price,
         status: req.body.status,
-        downpayment: req.body.downpayment || 0.00,
-        salesDate: (req.body.salesDate ?? req.body.date) ? new Date(req.body.salesDate ?? req.body.date) : undefined,
+        downpayment,
+        salesDate: date ? new Date(date) : undefined,
         client: { connect: { clientId: client.clientId } }
       }, include: { client: true }
     });
@@ -48,17 +54,22 @@ router.put('/:invoiceId', async (req: Request, res: Response) => {
     const targetId = Array.isArray(req.params.invoiceId)
       ? req.params.invoiceId[0]
       : req.params.invoiceId;
+    const date = req.body.salesDate ?? req.body.date;
+    const downpayment = req.body.downpayment ?? 0;
+    if (!isPositiveNumber(req.body.price) || !isNonNegativeNumber(downpayment) || Number(downpayment) > Number(req.body.price)) return res.status(400).json({ error: 'Enter a valid price and a downpayment no greater than the total price.' });
+    if (date !== undefined && !isValidNonFutureDate(date)) return res.status(400).json({ error: 'Sale date must be a valid date no later than today.' });
+    if (!['Custom', 'Repair', 'Resize', 'Cleaning'].includes(req.body.serviceType) || !['Ongoing', 'Paid', 'Released'].includes(req.body.status)) return res.status(400).json({ error: 'Choose a valid service type and status.' });
     const updatedSales = await prisma.sales.update({
       where: { invoiceId: targetId },
       data: {
         serviceType: req.body.serviceType,
         price: req.body.price,
         status: req.body.status,
-        downpayment: req.body.downpayment || 0.00,
-        salesDate: (req.body.salesDate ?? req.body.date) ? new Date(req.body.salesDate ?? req.body.date) : undefined,
+        downpayment,
+        salesDate: date ? new Date(date) : undefined,
         client: { update: {
-          ...(req.body.clientName ? { clientName: req.body.clientName } : {}),
-          ...(req.body.contactNum ? { contactNum: req.body.contactNum } : {}),
+          ...(typeof req.body.clientName === 'string' && req.body.clientName.trim() ? { clientName: req.body.clientName.trim() } : {}),
+          ...(typeof req.body.contactNum === 'string' && req.body.contactNum.trim() ? { contactNum: req.body.contactNum.trim() } : {}),
           balance: Math.max(0, Number(req.body.price ?? 0) - Number(req.body.downpayment ?? 0))
         } }
       }, include: { client: true }

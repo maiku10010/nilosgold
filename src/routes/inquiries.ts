@@ -1,5 +1,6 @@
 import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
+import { isNonNegativeNumber, isValidNonFutureDate } from '../validation';
 
 const router = Router();
 
@@ -7,6 +8,8 @@ const router = Router();
 router.post('/', async (req: Request, res: Response) => {
   try {
     const { customerName, contactInfo, details, category, quotedPrice, status, clientId } = req.body;
+    if (req.body.date !== undefined && !isValidNonFutureDate(req.body.date)) return res.status(400).json({ error: 'Inquiry date must be a valid date no later than today.' });
+    if (typeof customerName !== 'string' || !customerName.trim() || typeof category !== 'string' || !category.trim() || !isNonNegativeNumber(quotedPrice) || !['Pending', 'Yes', 'No'].includes(status ?? 'Pending')) return res.status(400).json({ error: 'Enter a customer, category, valid quote, and supported status.' });
 
     const newInquiry = await prisma.inquiries.create({
       data: {
@@ -47,6 +50,8 @@ router.put('/:inquiryId', async (req: Request, res: Response) => {
     const targetId = Array.isArray(req.params.inquiryId)
       ? req.params.inquiryId[0]
       : req.params.inquiryId;
+    if (req.body.date !== undefined && !isValidNonFutureDate(req.body.date)) return res.status(400).json({ error: 'Inquiry date must be a valid date no later than today.' });
+    if (typeof req.body.customerName !== 'string' || !req.body.customerName.trim() || typeof req.body.category !== 'string' || !req.body.category.trim() || !isNonNegativeNumber(req.body.quotedPrice) || !['Pending', 'Yes', 'No'].includes(req.body.status)) return res.status(400).json({ error: 'Enter a customer, category, valid quote, and supported status.' });
     const updatedInquiry = await prisma.inquiries.update({
       where: { inquiryId: targetId },
       data: {
