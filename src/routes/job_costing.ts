@@ -7,7 +7,13 @@ const router = Router();
 router.post('/', async (req: Request, res: Response) => {
   try {
     const newJobCost = await prisma.$transaction(async (tx) => {
-      if (req.body.sellingPrice !== undefined) await tx.sales.update({ where: { invoiceId: req.body.invoiceId }, data: { price: req.body.sellingPrice } });
+      if (req.body.sellingPrice !== undefined) {
+        const sale = await tx.sales.findUniqueOrThrow({ where: { invoiceId: req.body.invoiceId }, select: { downpayment: true } });
+        await tx.sales.update({ where: { invoiceId: req.body.invoiceId }, data: {
+          price: req.body.sellingPrice,
+          client: { update: { balance: Math.max(0, Number(req.body.sellingPrice) - Number(sale.downpayment)) } }
+        } });
+      }
       const employee = req.body.empId
         ? { empId: req.body.empId }
         : await tx.employee.findFirst({ select: { empId: true } });
@@ -34,7 +40,10 @@ router.post('/', async (req: Request, res: Response) => {
 router.get('/', async (req: Request, res: Response) => {
   try {
     const allJobCosts = await prisma.job_Cost.findMany({
-      include: { employee: true, sale: { include: { client: true } } }
+      include: {
+        employee: { select: { empId: true, empName: true, empRole: true } },
+        sale: { include: { client: true } }
+      }
     });
     res.json(allJobCosts);
   } catch (error) {
@@ -50,7 +59,13 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       ? req.params.jobCostId[0]
       : req.params.jobCostId;
     const updatedJobCost = await prisma.$transaction(async (tx) => {
-      if (req.body.sellingPrice !== undefined) await tx.sales.update({ where: { invoiceId: req.body.invoiceId }, data: { price: req.body.sellingPrice } });
+      if (req.body.sellingPrice !== undefined) {
+        const sale = await tx.sales.findUniqueOrThrow({ where: { invoiceId: req.body.invoiceId }, select: { downpayment: true } });
+        await tx.sales.update({ where: { invoiceId: req.body.invoiceId }, data: {
+          price: req.body.sellingPrice,
+          client: { update: { balance: Math.max(0, Number(req.body.sellingPrice) - Number(sale.downpayment)) } }
+        } });
+      }
       return tx.job_Cost.update({
       where: { jobCostId: targetId },
       data: {
