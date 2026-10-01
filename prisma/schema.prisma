@@ -149,11 +149,16 @@ model Inventory {
   referenceId String    @id
   itemName    String
   unit        String
+  category    String    @default("GOLD")
+  quantityIn  Decimal   @default(0.00)
+  quantityOut Decimal   @default(0.00)
+  quantityLoss Decimal  @default(0.00)
+  balance     Decimal   @default(0.00)
   goldIn      Decimal   @default(0.00)
   goldOut     Decimal   @default(0.00)
   scraps      Decimal   @default(0.00)
   totalGold   Decimal   @default(0.00)
-  updatedAt   DateTime  @updatedAt @map("date")
+  updatedAt   DateTime  @default(now()) @map("date")
   deletedAt   DateTime?
 
   @@map("inventory")

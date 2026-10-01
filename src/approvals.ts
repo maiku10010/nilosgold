@@ -19,7 +19,7 @@ function requestSpec(req: Request): Spec | null {
     job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
     inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'date', 'inqDate'] },
     expenses: { entity: 'EXPENSE', allowed: ['category', 'amount', 'description', 'expDate', 'date'] },
-    inventory: { entity: 'INVENTORY', allowed: ['itemName', 'goldIn', 'goldOut', 'scraps', 'scrap', 'totalGold', 'balance', 'unit', 'date', 'updatedAt'] },
+    inventory: { entity: 'INVENTORY', allowed: ['itemName', 'category', 'quantityIn', 'quantityOut', 'quantityLoss', 'goldIn', 'goldOut', 'scraps', 'scrap', 'totalGold', 'balance', 'unit', 'date', 'updatedAt'] },
     // Client balance is derived from invoices and must never be manually edited.
     client: { entity: 'CLIENT', allowed: ['clientName', 'contactNum', 'email'] },
   };
@@ -42,7 +42,7 @@ async function findCurrent(entity: Entity, id: string): Promise<any> {
   }
 }
 
-const numericFields = new Set(['price', 'downpayment', 'goldUsed', 'goldCostPerG', 'stoneCost', 'laborCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'totalGold']);
+const numericFields = new Set(['price', 'downpayment', 'goldUsed', 'goldCostPerG', 'stoneCost', 'laborCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'totalGold', 'quantityIn', 'quantityOut', 'quantityLoss']);
 const positiveFields = new Set(['price', 'goldCostPerG', 'sellingPrice', 'amount']);
 const nullableStringFields = new Set(['contactInfo', 'email', 'details', 'description', 'contactNum']);
 function normalizedChanges(body: Record<string, unknown>, spec: Spec): Record<string, unknown> {
@@ -98,6 +98,12 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
     if (action === 'UPDATE') {
       try { proposedData = normalizedChanges(req.body ?? {}, spec); }
       catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
+      if (spec.entity === 'INVENTORY') {
+        const category = String(proposedData.category ?? current.category).toUpperCase();
+        const unit = String(proposedData.unit ?? current.unit);
+        const units: Record<string, string[]> = { GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'], BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'] };
+        if (!units[category] || !units[category].includes(unit)) { res.status(400).json({ error: 'Choose a supported category and unit combination.' }); return; }
+      }
       if (spec.entity === 'SALE') {
         const nextPrice = Number(proposedData.price ?? current.price);
         const nextDownpayment = Number(proposedData.downpayment ?? current.downpayment);
@@ -127,11 +133,13 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
 
 async function recalculateInventory(tx: Prisma.TransactionClient): Promise<void> {
   const rows = await tx.inventory.findMany({ where: { deletedAt: null }, orderBy: [{ updatedAt: 'asc' }, { referenceId: 'asc' }] });
-  let balance = 0;
+  const balances = new Map<string, number>();
   for (const row of rows) {
-    balance = balance + Number(row.goldIn) - Number(row.goldOut) - Number(row.scraps);
-    if (balance < -0.000001) throw new Error(`Inventory change would make gold stock negative at ${row.referenceId}.`);
-    await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { totalGold: Math.max(0, balance) } });
+    const key = row.category === 'GOLD' ? `GOLD:${row.unit}` : `${row.category}:${row.unit}:${row.itemName.trim().toLowerCase()}`;
+    const balance = (balances.get(key) ?? 0) + Number(row.quantityIn) - Number(row.quantityOut) - Number(row.quantityLoss);
+    if (balance < -0.000001) throw new Error(`Inventory change would make ${row.category.toLowerCase()} stock negative at ${row.referenceId}.`);
+    const next = Math.max(0, balance); balances.set(key, next);
+    await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { balance: next, totalGold: row.category === 'GOLD' ? next : 0 } });
   }
 }
 
@@ -188,14 +196,24 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       ...(changes.description !== undefined ? { description: changes.description as string | null } : {}),
       ...(changes.expDate || changes.date ? { expDate: date('expDate') ?? date('date') } : {}),
     } }); return;
-    case 'INVENTORY': await tx.inventory.update({ where: { referenceId: id }, data: {
-      ...(changes.itemName !== undefined ? { itemName: changes.itemName as string } : {}),
-      ...(changes.goldIn !== undefined ? { goldIn: changes.goldIn as number } : {}),
-      ...(changes.goldOut !== undefined ? { goldOut: changes.goldOut as number } : {}),
-      ...(changes.scraps !== undefined ? { scraps: changes.scraps as number } : {}),
-      ...(changes.unit !== undefined ? { unit: changes.unit as string } : {}),
-      ...(changes.updatedAt || changes.date ? { updatedAt: date('updatedAt') ?? date('date') } : {}),
-    } }); await recalculateInventory(tx); return;
+    case 'INVENTORY': {
+      const current = await tx.inventory.findUnique({ where: { referenceId: id } });
+      if (!current) throw new Error('Inventory entry is no longer active.');
+      const category = String(changes.category ?? current.category);
+      const quantityIn = Number(changes.quantityIn ?? changes.goldIn ?? current.quantityIn);
+      const quantityOut = Number(changes.quantityOut ?? changes.goldOut ?? current.quantityOut);
+      const quantityLoss = Number(changes.quantityLoss ?? changes.scraps ?? current.quantityLoss);
+      await tx.inventory.update({ where: { referenceId: id }, data: {
+        ...(changes.itemName !== undefined ? { itemName: changes.itemName as string } : {}),
+        category,
+        quantityIn, quantityOut, quantityLoss,
+        goldIn: category === 'GOLD' ? quantityIn : 0,
+        goldOut: category === 'GOLD' ? quantityOut : 0,
+        scraps: category === 'GOLD' ? quantityLoss : 0,
+        ...(changes.unit !== undefined ? { unit: changes.unit as string } : {}),
+        updatedAt: date('updatedAt') ?? date('date') ?? new Date(),
+      } }); await recalculateInventory(tx); return;
+    }
     case 'CLIENT': await tx.client.update({ where: { clientId: id }, data: {
       ...(changes.clientName !== undefined ? { clientName: changes.clientName as string } : {}),
       ...(changes.contactNum !== undefined ? { contactNum: changes.contactNum as string | null } : {}),
