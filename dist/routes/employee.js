@@ -1,7 +1,11 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = require("../db");
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const router = (0, express_1.Router)();
 //create operation for employee
 router.post('/', async (req, res) => {
@@ -10,12 +14,13 @@ router.post('/', async (req, res) => {
             data: {
                 empName: req.body.empName,
                 userName: req.body.userName,
-                password: req.body.password,
+                password: await bcryptjs_1.default.hash(String(req.body.password ?? ''), 12),
                 empRole: req.body.empRole,
                 rates: req.body.rates
             }
         });
-        res.json(newEmployee);
+        const { password: _password, ...safeEmployee } = newEmployee;
+        res.json(safeEmployee);
     }
     catch (error) {
         console.error('Error creating employee:', error);
@@ -26,7 +31,7 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const allEmployees = await db_1.prisma.employee.findMany({
-            include: { jobs: true }
+            select: { empId: true, empName: true, userName: true, empRole: true, rates: true, jobs: true }
         });
         res.json(allEmployees);
     }
@@ -46,12 +51,13 @@ router.put('/:empId', async (req, res) => {
             data: {
                 empName: req.body.empName,
                 userName: req.body.userName,
-                password: req.body.password,
+                ...(req.body.password ? { password: await bcryptjs_1.default.hash(String(req.body.password), 12) } : {}),
                 empRole: req.body.empRole,
                 rates: req.body.rates,
             }
         });
-        res.json(updatedEmployee);
+        const { password: _password, ...safeEmployee } = updatedEmployee;
+        res.json(safeEmployee);
     }
     catch (error) {
         console.error('Error updating employee:', error);

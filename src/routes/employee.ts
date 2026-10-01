@@ -1,5 +1,6 @@
 import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
+import bcrypt from 'bcryptjs';
 
 const router = Router();
 
@@ -10,12 +11,13 @@ router.post('/', async (req: Request, res: Response) => {
       data: {
         empName: req.body.empName,
         userName: req.body.userName,
-        password: req.body.password,
+        password: await bcrypt.hash(String(req.body.password ?? ''), 12),
         empRole: req.body.empRole,
         rates: req.body.rates
       }
     });
-    res.json(newEmployee);
+    const { password: _password, ...safeEmployee } = newEmployee;
+    res.json(safeEmployee);
   } catch (error) {
     console.error('Error creating employee:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -26,7 +28,7 @@ router.post('/', async (req: Request, res: Response) => {
 router.get('/', async (req: Request, res: Response) => {
   try {
     const allEmployees = await prisma.employee.findMany({
-      include: { jobs: true }
+      select: { empId: true, empName: true, userName: true, empRole: true, rates: true, jobs: true }
     });
     res.json(allEmployees);
   } catch (error) {
@@ -46,12 +48,13 @@ router.put('/:empId', async (req: Request, res: Response) => {
       data: {
         empName: req.body.empName,
         userName: req.body.userName,
-        password: req.body.password,
+        ...(req.body.password ? { password: await bcrypt.hash(String(req.body.password), 12) } : {}),
         empRole: req.body.empRole,
         rates: req.body.rates,
       }
     });
-    res.json(updatedEmployee);
+    const { password: _password, ...safeEmployee } = updatedEmployee;
+    res.json(safeEmployee);
   } catch (error) {
     console.error('Error updating employee:', error);
     res.status(500).json({ error: 'Internal Server Error' });

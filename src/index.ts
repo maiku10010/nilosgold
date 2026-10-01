@@ -10,11 +10,13 @@ import employeeRouter from './routes/employee';
 import expensesRouter from './routes/expenses';
 import inventoryRouter from './routes/inventory';
 import jobCostingRouter from './routes/job_costing';
+import authRouter from './routes/auth';
 
 const app = express();
 
 app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) ?? '*' }));
 app.use(express.json());
+app.use('/auth', authRouter);
 
 // Mount all routes
 app.use('/inquiries', inquiriesRouter);

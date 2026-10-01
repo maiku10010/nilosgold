@@ -14,9 +14,11 @@ const employee_1 = __importDefault(require("./routes/employee"));
 const expenses_1 = __importDefault(require("./routes/expenses"));
 const inventory_1 = __importDefault(require("./routes/inventory"));
 const job_costing_1 = __importDefault(require("./routes/job_costing"));
+const auth_1 = __importDefault(require("./routes/auth"));
 const app = (0, express_1.default)();
-app.use((0, cors_1.default)());
+app.use((0, cors_1.default)({ origin: process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) ?? '*' }));
 app.use(express_1.default.json());
+app.use('/auth', auth_1.default);
 // Mount all routes
 app.use('/inquiries', inquiries_1.default);
 app.use('/sales', sales_1.default);
@@ -30,6 +32,10 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', message: 'Goldsmith Master Control API is running' });
 });
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Goldsmith Master Control API running on http://localhost:${PORT}`);
-});
+// Vercel imports this handler as a serverless function; local runs still listen on PORT.
+if (process.env.VERCEL !== '1') {
+    app.listen(PORT, () => {
+        console.log(`Goldsmith Master Control API running on http://localhost:${PORT}`);
+    });
+}
+exports.default = app;
