@@ -1,6 +1,7 @@
 import { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import { isNonNegativeNumber, isPositiveNumber, isValidNonFutureDate } from '../validation';
+import { receiptEmail, sendSystemEmail } from '../services/email';
 
 const router = Router();
 const serviceTypes = ['Custom', 'Repair', 'Resize', 'Cleaning'];
@@ -14,7 +15,7 @@ router.post('/', (_req: Request, res: Response) => {
 
 router.get('/', async (_req: Request, res: Response) => {
   try {
-    const sales = await prisma.sales.findMany({ include: saleIncludes, orderBy: { salesDate: 'desc' } });
+    const sales = await prisma.sales.findMany({ where: { deletedAt: null }, include: saleIncludes, orderBy: { salesDate: 'desc' } });
     res.json(sales);
   } catch (error) {
     console.error('Error fetching sales:', error);
@@ -34,10 +35,11 @@ router.post('/:invoiceId/finish', async (req: Request, res: Response) => {
     const sale = await prisma.$transaction(async (tx) => {
       const current = await tx.sales.findUnique({ where: { invoiceId }, include: { client: true, job: { include: { inquiry: true } } } });
       if (!current) throw Object.assign(new Error('Invoice not found.'), { statusCode: 404 });
+      if (current.deletedAt) throw Object.assign(new Error('Invoice not found.'), { statusCode: 404 });
       if (current.client.clientName.trim().toLocaleLowerCase() !== clientName.toLocaleLowerCase()) {
         throw Object.assign(new Error('The client name and invoice number do not match.'), { statusCode: 409 });
       }
-      if (current.status !== 'PENDING' || !current.job || current.job.status !== 'APPROVED') {
+      if (current.status !== 'PENDING' || !current.job || current.job.deletedAt || !['APPROVED', 'READY_FOR_PICKUP'].includes(current.job.status)) {
         throw Object.assign(new Error('Only an approved job costing can be moved to Daily Sales.'), { statusCode: 409 });
       }
 
@@ -51,7 +53,7 @@ router.post('/:invoiceId/finish', async (req: Request, res: Response) => {
       }
 
       const otherSales = await tx.sales.findMany({
-        where: { clientId: current.clientId, invoiceId: { not: invoiceId } },
+        where: { clientId: current.clientId, invoiceId: { not: invoiceId }, deletedAt: null },
         select: { price: true, downpayment: true },
       });
       const balance = otherSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0)
@@ -60,7 +62,16 @@ router.post('/:invoiceId/finish', async (req: Request, res: Response) => {
 
       return tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes });
     });
-    res.json(sale);
+    let notification: { sent: boolean; reason?: string } = { sent: false, reason: 'Customer email is missing.' };
+    if (sale.receiptSentAt) notification = { sent: true, reason: 'Receipt email was already sent.' };
+    else {
+      notification = await sendSystemEmail(sale.client.email, `Official Receipt · ${sale.invoiceId}`, receiptEmail(sale), `official-receipt-${sale.invoiceId}`);
+      if (notification.sent) {
+        await prisma.sales.update({ where: { invoiceId: sale.invoiceId }, data: { receiptSentAt: new Date() } });
+        sale.receiptSentAt = new Date();
+      }
+    }
+    res.json({ ...sale, notification });
   } catch (error) {
     const statusCode = Number((error as { statusCode?: number })?.statusCode);
     if (statusCode) return res.status(statusCode).json({ error: (error as Error).message });
@@ -85,7 +96,7 @@ router.put('/:invoiceId', async (req: Request, res: Response) => {
     }
 
     const updated = await prisma.$transaction(async (tx) => {
-      const current = await tx.sales.findUnique({ where: { invoiceId }, include: { client: true } });
+      const current = await tx.sales.findFirst({ where: { invoiceId, deletedAt: null }, include: { client: true } });
       if (!current) throw Object.assign(new Error('Invoice not found.'), { statusCode: 404 });
       if (current.status === 'PENDING') throw Object.assign(new Error('Edit this invoice from its approved job costing.'), { statusCode: 409 });
       if (current.client.clientName.trim().toLocaleLowerCase() !== req.body.clientName.trim().toLocaleLowerCase()) {
@@ -105,12 +116,13 @@ router.put('/:invoiceId', async (req: Request, res: Response) => {
         },
       });
       const outstandingSales = await tx.sales.findMany({
-        where: { clientId: current.clientId },
+        where: { clientId: current.clientId, deletedAt: null },
         select: { price: true, downpayment: true },
       });
+      const updatedAmounts = await tx.sales.findMany({ where: { clientId: current.clientId, deletedAt: null }, select: { price: true, downpayment: true } });
       await tx.client.update({ where: { clientId: current.clientId }, data: {
         clientName: req.body.clientName.trim(),
-        balance: outstandingSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0),
+        balance: updatedAmounts.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0),
       } });
       return tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes });
     });
@@ -127,17 +139,17 @@ router.delete('/:invoiceId', async (req: Request, res: Response) => {
   try {
     const invoiceId = Array.isArray(req.params.invoiceId) ? req.params.invoiceId[0] : req.params.invoiceId;
     await prisma.$transaction(async (tx) => {
-      const sale = await tx.sales.findUnique({ where: { invoiceId }, include: { job: true } });
+      const sale = await tx.sales.findFirst({ where: { invoiceId, deletedAt: null }, include: { job: true } });
       if (!sale) throw Object.assign(new Error('Invoice not found.'), { statusCode: 404 });
       if (sale.job) {
         const inquiryId = sale.job.inquiryId;
-        await tx.sales.delete({ where: { invoiceId } });
-        await tx.job_Cost.delete({ where: { jobCostId: sale.job.jobCostId } });
+        await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
+        await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
         if (inquiryId) await tx.inquiries.update({ where: { inquiryId }, data: { status: 'PENDING' } });
       } else {
-        await tx.sales.delete({ where: { invoiceId } });
+        await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
       }
-      const remainingSales = await tx.sales.findMany({ where: { clientId: sale.clientId }, select: { price: true, downpayment: true } });
+      const remainingSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, downpayment: true } });
       await tx.client.update({ where: { clientId: sale.clientId }, data: {
         balance: remainingSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0),
       } });

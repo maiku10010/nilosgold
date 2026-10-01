@@ -2,6 +2,7 @@ import { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import { friendlyId } from '../friendlyId';
 import { isNonNegativeNumber, isPositiveNumber } from '../validation';
+import { readyEmail, sendSystemEmail } from '../services/email';
 
 const router = Router();
 const serviceTypes = ['Custom', 'Repair', 'Resize', 'Cleaning'];
@@ -29,24 +30,30 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     const jobCost = await prisma.$transaction(async (tx) => {
-      const inquiry = await tx.inquiries.findUnique({ where: { inquiryId }, include: { jobCost: true, client: true } });
-      if (!inquiry) throw Object.assign(new Error('Inquiry not found.'), { statusCode: 404 });
-      if (inquiry.status !== 'PENDING' || inquiry.jobCost) throw Object.assign(new Error('Only pending inquiries can be sent to job costing.'), { statusCode: 409 });
+      const inquiry = await tx.inquiries.findFirst({ where: { inquiryId, deletedAt: null }, include: { jobCost: true, client: true } });
+      if (!inquiry) throw Object.assign(new Error('Inquiry not found or already archived.'), { statusCode: 404 });
+      if (inquiry.status !== 'PENDING' || (inquiry.jobCost && !inquiry.jobCost.deletedAt)) throw Object.assign(new Error('Only pending inquiries can be sent to job costing.'), { statusCode: 409 });
+      // A soft-deleted costing must release the inquiry's unique one-to-one link
+      // so the customer can be costed again while retaining the old record.
+      if (inquiry.jobCost?.deletedAt) await tx.job_Cost.update({ where: { jobCostId: inquiry.jobCost.jobCostId }, data: { inquiryId: null } });
       if (inquiry.customerName.trim().toLocaleLowerCase() !== clientName.trim().toLocaleLowerCase()) {
         throw Object.assign(new Error('The client name must match the selected inquiry.'), { statusCode: 400 });
       }
 
       const employee = empId
-        ? await tx.employee.findUnique({ where: { empId }, select: { empId: true } })
-        : await tx.employee.findFirst({ select: { empId: true } });
+        ? await tx.employee.findFirst({ where: { empId, deletedAt: null }, select: { empId: true } })
+        : await tx.employee.findFirst({ where: { deletedAt: null }, select: { empId: true } });
       if (!employee) throw Object.assign(new Error('Assign an existing employee before approving job costing.'), { statusCode: 409 });
 
       let client = inquiry.client;
       const normalizedContact = typeof contactNum === 'string' && contactNum.trim() ? contactNum.trim() : null;
       if (!client) {
         client = await tx.client.findFirst({
-          where: { clientName: { equals: inquiry.customerName, mode: 'insensitive' }, contactNum: normalizedContact },
+            where: { clientName: { equals: inquiry.customerName, mode: 'insensitive' }, contactNum: normalizedContact, deletedAt: null },
         });
+      }
+      if (client && inquiry.email && client.email !== inquiry.email) {
+        client = await tx.client.update({ where: { clientId: client.clientId }, data: { email: inquiry.email } });
       }
       if (!client) {
         client = await tx.client.create({
@@ -54,6 +61,7 @@ router.post('/', async (req: Request, res: Response) => {
             clientId: friendlyId(),
             clientName: inquiry.customerName.trim(),
             contactNum: normalizedContact,
+            email: inquiry.email,
             balance: 0,
           },
         });
@@ -66,7 +74,7 @@ router.post('/', async (req: Request, res: Response) => {
           goldCostPerG,
           stoneCost,
           laborCost,
-          status: 'APPROVED',
+          status: 'PENDING',
           employee: { connect: { empId: employee.empId } },
           inquiry: { connect: { inquiryId } },
         },
@@ -101,11 +109,52 @@ router.post('/', async (req: Request, res: Response) => {
 
 router.get('/', async (_req: Request, res: Response) => {
   try {
-    const jobCosts = await prisma.job_Cost.findMany({ include: includeJob, orderBy: { jobDate: 'desc' } });
+    const jobCosts = await prisma.job_Cost.findMany({ where: { deletedAt: null }, include: includeJob, orderBy: { jobDate: 'desc' } });
     res.json(jobCosts);
   } catch (error) {
     console.error('Error fetching job costing:', error);
     res.status(500).json({ error: 'Job costing could not be loaded.' });
+  }
+});
+
+router.post('/:jobCostId/approve', async (req: Request, res: Response) => {
+  const jobCostId = Array.isArray(req.params.jobCostId) ? req.params.jobCostId[0] : req.params.jobCostId;
+  try {
+    const approved = await prisma.$transaction(async tx => {
+      const current = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { sales: true } });
+      if (!current) throw Object.assign(new Error('Job costing record not found.'), { statusCode: 404 });
+      if (current.status !== 'PENDING' || !current.sales || current.sales.deletedAt) throw Object.assign(new Error('Only a pending costing with an active invoice can be approved.'), { statusCode: 409 });
+      await tx.job_Cost.update({ where: { jobCostId }, data: { status: 'APPROVED' } });
+      return tx.job_Cost.findUniqueOrThrow({ where: { jobCostId }, include: includeJob });
+    });
+    res.json(approved);
+  } catch (error) {
+    const status = Number((error as { statusCode?: number }).statusCode);
+    if (status) return res.status(status).json({ error: (error as Error).message });
+    console.error('Could not approve job costing:', error);
+    res.status(500).json({ error: 'Job costing could not be approved.' });
+  }
+});
+
+router.post('/:jobCostId/ready', async (req: Request, res: Response) => {
+  const jobCostId = Array.isArray(req.params.jobCostId) ? req.params.jobCostId[0] : req.params.jobCostId;
+  try {
+    const job = await prisma.$transaction(async tx => {
+      const current = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { sales: { include: { client: true } } } });
+      if (!current || !current.sales || current.sales.deletedAt) throw Object.assign(new Error('Active job costing and invoice were not found.'), { statusCode: 404 });
+      if (!['APPROVED', 'IN_PROGRESS', 'READY_FOR_PICKUP'].includes(current.status)) throw Object.assign(new Error('Approve the job costing before marking it ready.'), { statusCode: 409 });
+      if (current.status !== 'READY_FOR_PICKUP') await tx.job_Cost.update({ where: { jobCostId }, data: { status: 'READY_FOR_PICKUP' } });
+      return tx.job_Cost.findUniqueOrThrow({ where: { jobCostId }, include: { sales: { include: { client: true } } } });
+    });
+    if (job.readyNotifiedAt) { res.json({ job, notification: { sent: true, reason: 'A pickup notification was already sent.' } }); return; }
+    const result = await sendSystemEmail(job.sales?.client.email, `Your item is ready · ${job.sales?.invoiceId}`, readyEmail(job as any), `ready-for-pickup-${job.jobCostId}`);
+    if (result.sent) await prisma.job_Cost.update({ where: { jobCostId }, data: { readyNotifiedAt: new Date() } });
+    res.json({ job: await prisma.job_Cost.findUniqueOrThrow({ where: { jobCostId }, include: includeJob }), notification: result });
+  } catch (error) {
+    const status = Number((error as { statusCode?: number }).statusCode);
+    if (status) return res.status(status).json({ error: (error as Error).message });
+    console.error('Could not notify customer that the item is ready:', error);
+    res.status(500).json({ error: 'Item is ready, but the notification could not be sent.' });
   }
 });
 
@@ -125,7 +174,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
     }
 
     const updated = await prisma.$transaction(async (tx) => {
-      const existing = await tx.job_Cost.findUnique({ where: { jobCostId }, include: { sales: { include: { client: true } } } });
+      const existing = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { sales: { include: { client: true } } } });
       if (!existing) throw Object.assign(new Error('Job costing record not found.'), { statusCode: 404 });
       if (!existing.sales) throw Object.assign(new Error('This costing has no linked invoice.'), { statusCode: 409 });
       const namesMatch = existing.sales.client.clientName.trim().toLocaleLowerCase() === req.body.clientName.trim().toLocaleLowerCase();
@@ -133,7 +182,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
         throw Object.assign(new Error('The client name and invoice number must match this costing.'), { statusCode: 409 });
       }
       if (req.body.empId && req.body.empId !== existing.empId) {
-        const employee = await tx.employee.findUnique({ where: { empId: req.body.empId }, select: { empId: true } });
+        const employee = await tx.employee.findFirst({ where: { empId: req.body.empId, deletedAt: null }, select: { empId: true } });
         if (!employee) throw Object.assign(new Error('Choose an existing employee.'), { statusCode: 400 });
       }
 
@@ -173,17 +222,17 @@ router.delete('/:jobCostId', async (req: Request, res: Response) => {
   try {
     const jobCostId = Array.isArray(req.params.jobCostId) ? req.params.jobCostId[0] : req.params.jobCostId;
     await prisma.$transaction(async (tx) => {
-      const job = await tx.job_Cost.findUnique({ where: { jobCostId }, include: { inquiry: true, sales: true } });
+      const job = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { inquiry: true, sales: true } });
       if (!job) throw Object.assign(new Error('Job costing record not found.'), { statusCode: 404 });
       if (job.sales) {
         const { clientId, invoiceId } = job.sales;
-        await tx.sales.delete({ where: { invoiceId } });
-        const remainingSales = await tx.sales.findMany({ where: { clientId }, select: { price: true, downpayment: true } });
+        await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
+        const remainingSales = await tx.sales.findMany({ where: { clientId, deletedAt: null }, select: { price: true, downpayment: true } });
         await tx.client.update({ where: { clientId }, data: {
           balance: remainingSales.reduce((sum, sale) => sum + Math.max(0, Number(sale.price) - Number(sale.downpayment)), 0),
         } });
       }
-      await tx.job_Cost.delete({ where: { jobCostId } });
+      await tx.job_Cost.update({ where: { jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
       if (job.inquiryId) await tx.inquiries.update({ where: { inquiryId: job.inquiryId }, data: { status: 'PENDING' } });
     });
     res.json({ message: 'Job costing and its linked invoice were removed; the inquiry is pending again.' });

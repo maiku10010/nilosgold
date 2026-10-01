@@ -21,6 +21,7 @@ enum JobStatus {
   PENDING
   APPROVED
   IN_PROGRESS
+  READY_FOR_PICKUP
   FINISHED
   CANCELLED
 }
@@ -33,14 +34,22 @@ enum SalesStatus {
   CANCELLED
 }
 
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 model Client {
   clientId   String  @id
   clientName String
   contactNum String?
+  email      String?
   balance    Decimal @default(0.00)
 
   inquiries Inquiries[]
   sales     Sales[]
+  deletedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -55,8 +64,13 @@ model Employee {
   rates    Decimal
   userName String  @unique
   password String
+  deletedAt DateTime?
 
   jobs Job_Cost[]
+  sessions AuthSession[]
+  auditLogs SystemLog[] @relation("LogActor")
+  approvalRequests ApprovalRequest[] @relation("ApprovalRequester")
+  approvalReviews ApprovalRequest[] @relation("ApprovalReviewer")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -70,12 +84,14 @@ model Inquiries {
   quotedPrice  Decimal
   customerName String
   contactInfo  String?
+  email        String?
   details      String?
   status       InquiryStatus @default(PENDING)
   inqDate      DateTime      @default(now()) @map("date")
 
   clientId String?
   client   Client? @relation(fields: [clientId], references: [clientId], onDelete: SetNull)
+  deletedAt DateTime?
 
   // One inquiry can create at most one costing record.
   jobCost Job_Cost?
@@ -91,6 +107,8 @@ model Job_Cost {
   goldCostPerG Decimal   @default(0.00)
   status       JobStatus @default(IN_PROGRESS)
   jobDate      DateTime  @default(now()) @map("date")
+  readyNotifiedAt DateTime?
+  deletedAt DateTime?
 
   empId    String
   employee Employee @relation(fields: [empId], references: [empId], onDelete: Restrict)
@@ -112,6 +130,8 @@ model Sales {
   downpayment Decimal     @default(0.00)
   status      SalesStatus @default(PAID)
   salesDate   DateTime    @default(now()) @map("date")
+  receiptSentAt DateTime?
+  deletedAt DateTime?
 
   clientId String
   client   Client @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
@@ -132,6 +152,7 @@ model Inventory {
   scraps      Decimal  @default(0.00)
   totalGold   Decimal  @default(0.00)
   updatedAt   DateTime @updatedAt @map("date")
+  deletedAt   DateTime?
 
   @@map("inventory")
 }
@@ -142,6 +163,60 @@ model Expenses {
   amount      Decimal
   description String?
   expDate     DateTime @default(now()) @map("date")
+  deletedAt   DateTime?
 
   @@map("expenses")
+}
+
+model AuthSession {
+  id         String   @id
+  empId      String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+  employee   Employee @relation(fields: [empId], references: [empId], onDelete: Cascade)
+
+  @@index([empId, revokedAt])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+model SystemLog {
+  logId       String   @id @default(cuid())
+  actorEmpId  String?
+  actorName   String
+  actorRole   String
+  action      String
+  entityType  String?
+  entityId    String?
+  details     Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+  actor       Employee? @relation("LogActor", fields: [actorEmpId], references: [empId], onDelete: SetNull)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([actorEmpId, createdAt(sort: Desc)])
+  @@map("system_logs")
+}
+
+model ApprovalRequest {
+  requestId       String         @id @default(cuid())
+  entityType      String
+  entityId        String
+  action          String
+  beforeData      Json?
+  proposedData    Json?
+  status          ApprovalStatus @default(PENDING)
+  requesterEmpId  String
+  reviewerEmpId   String?
+  reviewerNote    String?
+  createdAt       DateTime       @default(now())
+  reviewedAt      DateTime?
+  requester       Employee       @relation("ApprovalRequester", fields: [requesterEmpId], references: [empId], onDelete: Restrict)
+  reviewer        Employee?      @relation("ApprovalReviewer", fields: [reviewerEmpId], references: [empId], onDelete: SetNull)
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([entityType, entityId, status])
+  @@map("approval_requests")
 }

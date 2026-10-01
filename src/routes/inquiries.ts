@@ -7,18 +7,20 @@ const router = Router();
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { customerName, contactInfo, details, category, quotedPrice, clientId } = req.body;
+    const { customerName, contactInfo, email, details, category, quotedPrice, clientId } = req.body;
     const date = req.body.date;
     if (date !== undefined && !isValidNonFutureDate(date)) return res.status(400).json({ error: 'Inquiry date must be a valid date no later than today.' });
     if (typeof customerName !== 'string' || !customerName.trim() || typeof category !== 'string' || !category.trim() || !isNonNegativeNumber(quotedPrice)) {
       return res.status(400).json({ error: 'Enter a customer, category, and valid quote.' });
     }
+    if (email && (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))) return res.status(400).json({ error: 'Enter a valid customer email address.' });
 
     const inquiry = await prisma.inquiries.create({
       data: {
         inquiryId: friendlyId(),
         customerName: customerName.trim(),
         contactInfo: typeof contactInfo === 'string' ? contactInfo.trim() : null,
+        email: typeof email === 'string' && email.trim() ? email.trim() : null,
         details: typeof details === 'string' ? details.trim() : null,
         category: category.trim(),
         quotedPrice: Number(quotedPrice),
@@ -39,6 +41,7 @@ router.post('/', async (req: Request, res: Response) => {
 router.get('/', async (_req: Request, res: Response) => {
   try {
     const inquiries = await prisma.inquiries.findMany({
+      where: { deletedAt: null },
       include: { client: true, jobCost: { include: { sales: true } } },
       orderBy: { inqDate: 'desc' },
     });
@@ -57,16 +60,18 @@ router.put('/:inquiryId', async (req: Request, res: Response) => {
     if (typeof req.body.customerName !== 'string' || !req.body.customerName.trim() || typeof req.body.category !== 'string' || !req.body.category.trim() || !isNonNegativeNumber(req.body.quotedPrice)) {
       return res.status(400).json({ error: 'Enter a customer, category, and valid quote.' });
     }
+    if (req.body.email && (typeof req.body.email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(req.body.email.trim()))) return res.status(400).json({ error: 'Enter a valid customer email address.' });
 
-    const existing = await prisma.inquiries.findUnique({ where: { inquiryId }, include: { jobCost: true } });
+    const existing = await prisma.inquiries.findFirst({ where: { inquiryId, deletedAt: null }, include: { jobCost: true } });
     if (!existing) return res.status(404).json({ error: 'Inquiry not found.' });
-    if (existing.status !== 'PENDING' || existing.jobCost) return res.status(409).json({ error: 'Only pending inquiries without job costing can be edited.' });
+    if (existing.status !== 'PENDING' || (existing.jobCost && !existing.jobCost.deletedAt)) return res.status(409).json({ error: 'Only pending inquiries without an active job costing can be edited.' });
 
     const inquiry = await prisma.inquiries.update({
       where: { inquiryId },
       data: {
         customerName: req.body.customerName.trim(),
         contactInfo: typeof req.body.contactInfo === 'string' ? req.body.contactInfo.trim() : null,
+        email: typeof req.body.email === 'string' && req.body.email.trim() ? req.body.email.trim() : null,
         details: typeof req.body.details === 'string' ? req.body.details.trim() : null,
         category: req.body.category.trim(),
         quotedPrice: Number(req.body.quotedPrice),
@@ -84,10 +89,10 @@ router.put('/:inquiryId', async (req: Request, res: Response) => {
 router.delete('/:inquiryId', async (req: Request, res: Response) => {
   try {
     const inquiryId = Array.isArray(req.params.inquiryId) ? req.params.inquiryId[0] : req.params.inquiryId;
-    const existing = await prisma.inquiries.findUnique({ where: { inquiryId }, include: { jobCost: true } });
+    const existing = await prisma.inquiries.findFirst({ where: { inquiryId, deletedAt: null }, include: { jobCost: true } });
     if (!existing) return res.status(404).json({ error: 'Inquiry not found.' });
-    if (existing.jobCost) return res.status(409).json({ error: 'Delete the linked job costing before deleting this inquiry.' });
-    await prisma.inquiries.delete({ where: { inquiryId } });
+    if (existing.jobCost && !existing.jobCost.deletedAt) return res.status(409).json({ error: 'Delete the linked job costing before deleting this inquiry.' });
+    await prisma.inquiries.update({ where: { inquiryId }, data: { deletedAt: new Date() } });
     res.json({ message: 'Inquiry deleted.' });
   } catch (error) {
     console.error('Error deleting inquiry:', error);

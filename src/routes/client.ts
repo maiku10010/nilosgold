@@ -12,6 +12,7 @@ router.post('/', async (req: Request, res: Response) => {
         clientId: friendlyId(),
         clientName: req.body.clientName,
         contactNum: req.body.contactNum,
+        email: req.body.email || null,
         balance: req.body.balance
       }
     });
@@ -26,7 +27,8 @@ router.post('/', async (req: Request, res: Response) => {
 router.get('/', async (req: Request, res: Response) => {
   try {
     const allClients = await prisma.client.findMany({
-      include: { sales: true, inquiries: true }
+      where: { deletedAt: null },
+      include: { sales: { where: { deletedAt: null } }, inquiries: { where: { deletedAt: null } } }
     });
     res.json(allClients);
   } catch (error) {
@@ -46,6 +48,7 @@ router.put('/:clientId', async (req: Request, res: Response) => {
       data: {
         clientName: req.body.clientName,
         contactNum: req.body.contactNum,
+        email: req.body.email ?? undefined,
         balance: req.body.balance
       }
     });
@@ -61,9 +64,10 @@ router.delete('/:clientId', async (req: Request, res: Response) => {
     const targetId = Array.isArray(req.params.clientId)
       ? req.params.clientId[0]
       : req.params.clientId;
-    await prisma.client.delete({
-      where: { clientId: targetId }
+    const deleted = await prisma.client.updateMany({
+      where: { clientId: targetId, deletedAt: null }, data: { deletedAt: new Date() }
     });
+    if (!deleted.count) return res.status(404).json({ error: 'Client not found or already archived.' });
     res.json({ message: 'Client successfully deleted' });
   } catch (error: any) {
     // P2003 triggers if the client still has connected sales records
