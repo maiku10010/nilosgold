@@ -13,7 +13,7 @@ import jobCostingRouter from './routes/job_costing';
 
 const app = express();
 
-app.use(cors());
+app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) ?? '*' }));
 app.use(express.json());
 
 // Mount all routes
@@ -31,6 +31,12 @@ app.get('/health', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Goldsmith Master Control API running on http://localhost:${PORT}`);
-});
+
+// Vercel imports this handler as a serverless function; local runs still listen on PORT.
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`Goldsmith Master Control API running on http://localhost:${PORT}`);
+  });
+}
+
+export default app;
