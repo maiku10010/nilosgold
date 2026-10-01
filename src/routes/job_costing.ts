@@ -14,7 +14,10 @@ const includeJob = {
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { inquiryId, clientName, contactNum, empId, serviceType } = req.body;
+    const { inquiryId, clientName, contactNum, empId, serviceType, itemName, deadline, deliveryDate } = req.body;
+    const requestedDeadline = deadline ?? deliveryDate;
+    if (itemName !== undefined && itemName !== null && (typeof itemName !== 'string' || itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
+    if (requestedDeadline !== undefined && requestedDeadline !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(String(requestedDeadline)) || Number.isNaN(new Date(`${requestedDeadline}T00:00:00Z`).getTime()))) return res.status(400).json({ error: 'Enter a valid delivery date.' });
     const goldUsed = Number(req.body.goldUsed);
     const goldCostPerG = Number(req.body.goldCostPerG);
     const stoneCost = Number(req.body.stoneCost ?? 0);
@@ -70,6 +73,8 @@ router.post('/', async (req: Request, res: Response) => {
       const createdJob = await tx.job_Cost.create({
         data: {
           jobCostId: friendlyId(),
+          itemName: typeof itemName === 'string' && itemName.trim() ? itemName.trim() : null,
+          ...(requestedDeadline ? { deadline: new Date(`${requestedDeadline}T00:00:00Z`) } : {}),
           goldUsed,
           goldCostPerG,
           stoneCost,
@@ -166,6 +171,9 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
     const stoneCost = Number(req.body.stoneCost ?? 0);
     const laborCost = Number(req.body.laborCost);
     const sellingPrice = Number(req.body.sellingPrice);
+    const requestedDeadline = req.body.deadline ?? req.body.deliveryDate;
+    if (req.body.itemName !== undefined && req.body.itemName !== null && (typeof req.body.itemName !== 'string' || req.body.itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
+    if (requestedDeadline !== undefined && requestedDeadline !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(String(requestedDeadline)) || Number.isNaN(new Date(`${requestedDeadline}T00:00:00Z`).getTime()))) return res.status(400).json({ error: 'Enter a valid delivery date.' });
     if (![goldUsed, stoneCost, laborCost].every(isNonNegativeNumber) || !isPositiveNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
       return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
     }
@@ -193,6 +201,8 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
           goldCostPerG,
           stoneCost,
           laborCost,
+          ...(req.body.itemName !== undefined ? { itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : null } : {}),
+          ...(requestedDeadline !== undefined ? { deadline: requestedDeadline ? new Date(`${requestedDeadline}T00:00:00Z`) : null } : {}),
           ...(req.body.empId ? { empId: req.body.empId } : {}),
         },
       });

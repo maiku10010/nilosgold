@@ -1,7 +1,7 @@
 import { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import { friendlyId } from '../friendlyId';
-import { isNonNegativeNumber, isValidNonFutureDate } from '../validation';
+import { isNonNegativeNumber, isValidNonFutureDate, isValidPHContact, isValidEmail } from '../validation';
 
 const router = Router();
 
@@ -14,6 +14,7 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Enter a customer, category, and valid quote.' });
     }
     if (email && (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))) return res.status(400).json({ error: 'Enter a valid customer email address.' });
+    if (contactInfo && !isValidPHContact(contactInfo)) return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
 
     const inquiry = await prisma.inquiries.create({
       data: {
@@ -60,7 +61,8 @@ router.put('/:inquiryId', async (req: Request, res: Response) => {
     if (typeof req.body.customerName !== 'string' || !req.body.customerName.trim() || typeof req.body.category !== 'string' || !req.body.category.trim() || !isNonNegativeNumber(req.body.quotedPrice)) {
       return res.status(400).json({ error: 'Enter a customer, category, and valid quote.' });
     }
-    if (req.body.email && (typeof req.body.email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(req.body.email.trim()))) return res.status(400).json({ error: 'Enter a valid customer email address.' });
+    if (req.body.email && !isValidEmail(req.body.email)) return res.status(400).json({ error: 'Enter a valid customer email address.' });
+    if (req.body.contactInfo && !isValidPHContact(req.body.contactInfo)) return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
 
     const existing = await prisma.inquiries.findFirst({ where: { inquiryId, deletedAt: null }, include: { jobCost: true } });
     if (!existing) return res.status(404).json({ error: 'Inquiry not found.' });

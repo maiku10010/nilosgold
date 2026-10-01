@@ -1,12 +1,15 @@
 import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import { friendlyId } from '../friendlyId';
+import { isValidEmail, isValidPHContact } from '../validation';
 
 const router = Router();
 
 //create operation for client
 router.post('/', async (req: Request, res: Response) => {
   try {
+    if (!isValidPHContact(req.body.contactNum)) return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+    if (req.body.email && !isValidEmail(req.body.email)) return res.status(400).json({ error: 'Enter a valid email address.' });
     const newClient = await prisma.client.create({
       data: {
         clientId: friendlyId(),
@@ -43,6 +46,8 @@ router.put('/:clientId', async (req: Request, res: Response) => {
     const targetId = Array.isArray(req.params.clientId)
       ? req.params.clientId[0]
       : req.params.clientId;
+    if (!isValidPHContact(req.body.contactNum)) return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+    if (req.body.email && !isValidEmail(req.body.email)) return res.status(400).json({ error: 'Enter a valid email address.' });
     const updatedClient = await prisma.client.update({
       where: { clientId: targetId },
       data: {

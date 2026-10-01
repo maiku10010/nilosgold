@@ -101,6 +101,8 @@ model Inquiries {
 
 model Job_Cost {
   jobCostId       String    @id
+  itemName        String?   @map("item_name")
+  deadline        DateTime? @map("delivery_date")
   goldUsed        Decimal   @default(0.00)
   stoneCost       Decimal   @default(0.00)
   laborCost       Decimal   @default(0.00)

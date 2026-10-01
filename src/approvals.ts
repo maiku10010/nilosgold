@@ -15,8 +15,8 @@ function requestSpec(req: Request): Spec | null {
   const [resource, id] = segments;
   const resourceSpecs: Record<string, { entity: Entity; allowed: string[] }> = {
     sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'downpayment', 'salesDate', 'date', 'clientName', 'contactNum'] },
-    'job-cost': { entity: 'JOB_COST', allowed: ['goldUsed', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice'] },
-    job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice'] },
+    'job-cost': { entity: 'JOB_COST', allowed: ['goldUsed', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
+    job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
     inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'date', 'inqDate'] },
     expenses: { entity: 'EXPENSE', allowed: ['category', 'amount', 'description', 'expDate', 'date'] },
     inventory: { entity: 'INVENTORY', allowed: ['itemName', 'goldIn', 'goldOut', 'scraps', 'scrap', 'totalGold', 'balance', 'unit', 'date', 'updatedAt'] },
@@ -57,7 +57,7 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec): Record<st
       const value = Number(raw);
       if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0)) throw new Error(`Enter a valid ${key}.`);
       changes[key] = value;
-    } else if (['date', 'salesDate', 'inqDate', 'expDate', 'updatedAt'].includes(key)) {
+    } else if (['date', 'salesDate', 'inqDate', 'expDate', 'updatedAt', 'deadline', 'deliveryDate'].includes(key)) {
       if (typeof raw !== 'string' || !raw || Number.isNaN(Date.parse(raw))) throw new Error('Enter a valid date.');
       const date = new Date(raw.length === 10 ? `${raw}T00:00:00` : raw);
       if (date.getTime() > Date.now()) throw new Error('Dates cannot be in the future.');
@@ -166,6 +166,8 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
         ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: jobFields.goldCostPerG as number } : {}),
         ...(jobFields.stoneCost !== undefined ? { stoneCost: jobFields.stoneCost as number } : {}),
         ...(jobFields.laborCost !== undefined ? { laborCost: jobFields.laborCost as number } : {}),
+        ...(jobFields.itemName !== undefined ? { itemName: jobFields.itemName as string | null } : {}),
+        ...(jobFields.deadline !== undefined || jobFields.deliveryDate !== undefined ? { deadline: date('deadline') ?? date('deliveryDate') } : {}),
         ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
       } });
       if (sellingPrice !== undefined && job.sales) await tx.sales.update({ where: { invoiceId: job.sales.invoiceId }, data: { price: sellingPrice as number } });

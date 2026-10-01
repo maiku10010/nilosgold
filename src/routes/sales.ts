@@ -1,6 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { prisma } from '../db';
-import { isNonNegativeNumber, isPositiveNumber, isValidNonFutureDate } from '../validation';
+import { isNonNegativeNumber, isPositiveNumber, isValidNonFutureDate, isValidPHContact, meetsMinimumDownPayment, isValidEmail } from '../validation';
 import { receiptEmail, sendSystemEmail } from '../services/email';
 
 const router = Router();
@@ -86,9 +86,11 @@ router.put('/:invoiceId', async (req: Request, res: Response) => {
     const date = req.body.salesDate ?? req.body.date;
     const downpayment = Number(req.body.downpayment ?? 0);
     const price = Number(req.body.price);
-    if (!isPositiveNumber(price) || !isNonNegativeNumber(downpayment) || downpayment > price) {
-      return res.status(400).json({ error: 'Enter a valid price and a downpayment no greater than the total price.' });
+    if (!isPositiveNumber(price) || !meetsMinimumDownPayment(downpayment, price) || downpayment > price) {
+      return res.status(400).json({ error: 'Down payment must be at least 25% of the total price and no greater than the total price.' });
     }
+    if (req.body.contactNum !== undefined && !isValidPHContact(req.body.contactNum)) return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+    if (req.body.email !== undefined && req.body.email !== null && req.body.email !== '' && !isValidEmail(req.body.email)) return res.status(400).json({ error: 'Enter a valid email address.' });
     if (date !== undefined && !isValidNonFutureDate(date)) return res.status(400).json({ error: 'Sale date must be a valid date no later than today.' });
     if (!serviceTypes.includes(req.body.serviceType)) return res.status(400).json({ error: 'Choose a valid service type.' });
     if (typeof req.body.clientName !== 'string' || req.body.invoiceId !== invoiceId) {

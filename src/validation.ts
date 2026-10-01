@@ -22,3 +22,16 @@ export function isPositiveNumber(value: unknown): boolean {
   const parsed = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0;
 }
+
+export const PH_CONTACT_PATTERN = /^(09\d{9}|\+639\d{9})$/;
+export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export function isValidPHContact(value: unknown): boolean {
+  return typeof value === 'string' && PH_CONTACT_PATTERN.test(value.trim().replace(/[ -]/g, ''));
+}
+export function isValidEmail(value: unknown): boolean {
+  return typeof value === 'string' && EMAIL_PATTERN.test(value.trim());
+}
+export function meetsMinimumDownPayment(downpayment: unknown, price: unknown): boolean {
+  const down = Number(downpayment); const total = Number(price);
+  return Number.isFinite(down) && Number.isFinite(total) && total > 0 && down >= total * 0.25;
+}
