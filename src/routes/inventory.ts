@@ -8,11 +8,14 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const newItem = await prisma.inventory.create({
       data: {
+        referenceId: req.body.referenceId || undefined,
+        itemName: req.body.itemName || '',
         goldIn: req.body.goldIn || 0.00,
         goldOut: req.body.goldOut || 0.00,
         scraps: req.body.scraps || 0.00,
         totalGold: req.body.totalGold || 0.00,
-        unit: req.body.unit || 'grams'
+        unit: req.body.unit || 'grams',
+        ...(req.body.date ? { updatedAt: new Date(req.body.date) } : {})
       }
     });
     res.json(newItem);
@@ -25,7 +28,7 @@ router.post('/', async (req: Request, res: Response) => {
 //read operation for inventory
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const allItems = await prisma.inventory.findMany();
+    const allItems = await prisma.inventory.findMany({ orderBy: { updatedAt: 'asc' } });
     res.json(allItems);
   } catch (error) {
     console.error('Error fetching inventory items:', error);
@@ -42,11 +45,13 @@ router.put('/:referenceId', async (req: Request, res: Response) => {
     const updatedItem = await prisma.inventory.update({
       where: { referenceId: targetId },
       data: {
+        itemName: req.body.itemName,
         goldIn: req.body.goldIn,
         goldOut: req.body.goldOut,
         scraps: req.body.scraps,
         totalGold: req.body.totalGold,
-        unit: req.body.unit
+        unit: req.body.unit,
+        ...(req.body.date ? { updatedAt: new Date(req.body.date) } : {})
       }
     });
     res.json(updatedItem);

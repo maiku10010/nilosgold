@@ -6,17 +6,21 @@ const router = Router();
 //create operation for sales
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const newSales = await prisma.sales.create({
+    const { clientName, contactNum, ...sale } = req.body;
+    if (!clientName || !contactNum) return res.status(400).json({ error: 'Client name and contact number are required.' });
+    const newSales = await prisma.$transaction(async (tx) => {
+      const client = await tx.client.create({ data: { clientName, contactNum, balance: Math.max(0, Number(sale.price || 0) - Number(sale.downpayment || 0)) } });
+      return tx.sales.create({
       data: {
+        ...(typeof sale.invoiceId === 'string' && sale.invoiceId.trim() ? { invoiceId: sale.invoiceId.trim() } : {}),
         serviceType: req.body.serviceType,
         price: req.body.price,
         status: req.body.status,
         downpayment: req.body.downpayment || 0.00,
-        salesDate: req.body.salesDate ? new Date(req.body.salesDate) : undefined,
-        client: {
-          connect: { clientId: req.body.clientId }
-        }
-      }
+        salesDate: (req.body.salesDate ?? req.body.date) ? new Date(req.body.salesDate ?? req.body.date) : undefined,
+        client: { connect: { clientId: client.clientId } }
+      }, include: { client: true }
+    });
     });
     res.json(newSales);
   } catch (error) {
@@ -51,8 +55,13 @@ router.put('/:invoiceId', async (req: Request, res: Response) => {
         price: req.body.price,
         status: req.body.status,
         downpayment: req.body.downpayment || 0.00,
-        salesDate: req.body.salesDate ? new Date(req.body.salesDate) : undefined
-      }
+        salesDate: (req.body.salesDate ?? req.body.date) ? new Date(req.body.salesDate ?? req.body.date) : undefined,
+        client: { update: {
+          ...(req.body.clientName ? { clientName: req.body.clientName } : {}),
+          ...(req.body.contactNum ? { contactNum: req.body.contactNum } : {}),
+          balance: Math.max(0, Number(req.body.price ?? 0) - Number(req.body.downpayment ?? 0))
+        } }
+      }, include: { client: true }
     });
     res.json(updatedSales);
   } catch (error) {

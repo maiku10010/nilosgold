@@ -10,7 +10,8 @@ router.post('/', async (req: Request, res: Response) => {
       data: {
         category: req.body.category,
         amount: req.body.amount,
-        description: req.body.description
+        description: req.body.description,
+        ...(req.body.expDate ? { expDate: new Date(req.body.expDate) } : {})
       }
     });
     res.json(newExpense);
@@ -42,7 +43,8 @@ router.put('/:expenseId', async (req: Request, res: Response) => {
       data: {
         category: req.body.category,
         amount: req.body.amount,
-        description: req.body.description
+        description: req.body.description,
+        ...(req.body.expDate ? { expDate: new Date(req.body.expDate) } : {})
       }
     });
     res.json(updatedExpense);

@@ -16,6 +16,7 @@ router.post('/', async (req: Request, res: Response) => {
         category,
         quotedPrice,
         status: status || 'Pending',
+        ...(req.body.date ? { inqDate: new Date(req.body.date) } : {}),
         ...(clientId ? { client: { connect: { clientId } } } : {})
       }
     });
@@ -54,13 +55,25 @@ router.put('/:inquiryId', async (req: Request, res: Response) => {
         details: req.body.details,
         category: req.body.category,
         quotedPrice: req.body.quotedPrice,
-        status: req.body.status
+        status: req.body.status,
+        ...(req.body.date ? { inqDate: new Date(req.body.date) } : {})
       }
     });
     res.json(updatedInquiry);
   } catch (error) {
     console.error('Error updating inquiry:', error);
     res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.delete('/:inquiryId', async (req: Request, res: Response) => {
+  try {
+    const targetId = Array.isArray(req.params.inquiryId) ? req.params.inquiryId[0] : req.params.inquiryId;
+    await prisma.inquiries.delete({ where: { inquiryId: targetId } });
+    res.json({ message: 'Inquiry successfully deleted' });
+  } catch (error) {
+    console.error('Error deleting inquiry:', error);
+    res.status(500).json({ error: 'Failed to delete inquiry' });
   }
 });
 

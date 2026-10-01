@@ -37,6 +37,7 @@ model Sales {
 
 model Inventory {
   referenceId String   @id @default(uuid())
+  itemName    String   @default("")
   goldIn      Decimal  @default(0.00)
   goldOut     Decimal  @default(0.00)
   scraps      Decimal  @default(0.00)
@@ -48,6 +49,8 @@ model Inventory {
 model Job_Cost {
   jobCostId String  @id @default(uuid())
   goldUsed  Decimal @default(0.00)
+  goldCostPerG Decimal @default(5450.00)
+  stoneCost Decimal @default(0.00)
   laborCost Decimal @default(0.00)
 
   invoiceId String @unique

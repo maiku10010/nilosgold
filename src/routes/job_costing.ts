@@ -6,13 +6,22 @@ const router = Router();
 //create operation for job_cost
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const newJobCost = await prisma.job_Cost.create({
+    const newJobCost = await prisma.$transaction(async (tx) => {
+      if (req.body.sellingPrice !== undefined) await tx.sales.update({ where: { invoiceId: req.body.invoiceId }, data: { price: req.body.sellingPrice } });
+      const employee = req.body.empId
+        ? { empId: req.body.empId }
+        : await tx.employee.findFirst({ select: { empId: true } });
+      if (!employee) throw new Error('Create an employee account before recording job costs.');
+      return tx.job_Cost.create({
       data: {
         goldUsed: req.body.goldUsed,
+        goldCostPerG: req.body.goldCostPerG ?? 5450,
+        stoneCost: req.body.stoneCost ?? 0,
         laborCost: req.body.laborCost,
         invoiceId: req.body.invoiceId,
-        empId: req.body.empId,
-      }
+        empId: employee.empId,
+      }, include: { sale: { include: { client: true } } }
+    });
     });
     res.json(newJobCost);
   } catch (error) {
@@ -25,7 +34,7 @@ router.post('/', async (req: Request, res: Response) => {
 router.get('/', async (req: Request, res: Response) => {
   try {
     const allJobCosts = await prisma.job_Cost.findMany({
-      include: { employee: true, sale: true }
+      include: { employee: true, sale: { include: { client: true } } }
     });
     res.json(allJobCosts);
   } catch (error) {
@@ -40,14 +49,19 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
     const targetId = Array.isArray(req.params.jobCostId)
       ? req.params.jobCostId[0]
       : req.params.jobCostId;
-    const updatedJobCost = await prisma.job_Cost.update({
+    const updatedJobCost = await prisma.$transaction(async (tx) => {
+      if (req.body.sellingPrice !== undefined) await tx.sales.update({ where: { invoiceId: req.body.invoiceId }, data: { price: req.body.sellingPrice } });
+      return tx.job_Cost.update({
       where: { jobCostId: targetId },
       data: {
         goldUsed: req.body.goldUsed,
+        goldCostPerG: req.body.goldCostPerG,
+        stoneCost: req.body.stoneCost ?? 0,
         laborCost: req.body.laborCost,
         invoiceId: req.body.invoiceId,
-        empId: req.body.empId
-      }
+        ...(req.body.empId ? { empId: req.body.empId } : {})
+      }, include: { sale: { include: { client: true } } }
+    });
     });
     res.json(updatedJobCost);
   } catch (error) {
