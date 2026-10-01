@@ -37,8 +37,8 @@ router.get('/', async (req: Request, res: Response) => {
 router.put('/:referenceId', async (req: Request, res: Response) => {
   try {
     const targetId = Array.isArray(req.params.referenceId)
-    ? req.params.referenceId[0]
-    : req.params.referenceId;
+      ? req.params.referenceId[0]
+      : req.params.referenceId;
     const updatedItem = await prisma.inventory.update({
       where: { referenceId: targetId },
       data: {

@@ -41,7 +41,7 @@ router.get('/', async (req: Request, res: Response) => {
 //update operation for sales
 router.put('/:invoiceId', async (req: Request, res: Response) => {
   try {
-    const targetId = Array.isArray(req.params.invoiceId)  
+    const targetId = Array.isArray(req.params.invoiceId)
       ? req.params.invoiceId[0]
       : req.params.invoiceId;
     const updatedSales = await prisma.sales.update({
@@ -72,8 +72,8 @@ router.delete('/:invoiceId', async (req: Request, res: Response) => {
     res.json({ message: 'Sale invoice successfully deleted' });
   } catch (error: any) {
     if (error.code === 'P2003') {
-      return res.status(400).json({ 
-        error: 'Cannot delete sale: Please delete the associated Job Costing record first.' 
+      return res.status(400).json({
+        error: 'Cannot delete sale: Please delete the associated Job Costing record first.'
       });
     }
     console.error('Error deleting sale:', error);

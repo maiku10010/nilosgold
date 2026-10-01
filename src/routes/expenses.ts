@@ -33,23 +33,23 @@ router.get('/', async (req: Request, res: Response) => {
 
 //update operation for expenses
 router.put('/:expenseId', async (req: Request, res: Response) => {
-    try {
-        const targetId = Array.isArray(req.params.expenseId)
-            ? req.params.expenseId[0]
-            : req.params.expenseId;
-        const updatedExpense = await prisma.expenses.update({
-            where: { expenseId: targetId },
-            data: {
-                category: req.body.category,
-                amount: req.body.amount,
-                description: req.body.description
-            }
-        });
-        res.json(updatedExpense);
-    } catch (error) {
-        console.error('Error updating expense:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
+  try {
+    const targetId = Array.isArray(req.params.expenseId)
+      ? req.params.expenseId[0]
+      : req.params.expenseId;
+    const updatedExpense = await prisma.expenses.update({
+      where: { expenseId: targetId },
+      data: {
+        category: req.body.category,
+        amount: req.body.amount,
+        description: req.body.description
+      }
+    });
+    res.json(updatedExpense);
+  } catch (error) {
+    console.error('Error updating expense:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 // DELETE http://localhost:3000/expenses/:expenseId
 router.delete('/:expenseId', async (req: Request, res: Response) => {

@@ -42,26 +42,26 @@ router.get('/', async (req: Request, res: Response) => {
 
 //update operation for inquiries
 router.put('/:inquiryId', async (req: Request, res: Response) => {
-    try {
-        const targetId = Array.isArray(req.params.inquiryId)
-            ? req.params.inquiryId[0]
-            : req.params.inquiryId;
-        const updatedInquiry = await prisma.inquiries.update({
-            where: { inquiryId: targetId },
-            data: {
-                customerName: req.body.customerName,
-                contactInfo: req.body.contactInfo,
-                details: req.body.details,
-                category: req.body.category,
-                quotedPrice: req.body.quotedPrice,
-                status: req.body.status
-            }
-        });
-        res.json(updatedInquiry);
-    } catch (error) {
-        console.error('Error updating inquiry:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
+  try {
+    const targetId = Array.isArray(req.params.inquiryId)
+      ? req.params.inquiryId[0]
+      : req.params.inquiryId;
+    const updatedInquiry = await prisma.inquiries.update({
+      where: { inquiryId: targetId },
+      data: {
+        customerName: req.body.customerName,
+        contactInfo: req.body.contactInfo,
+        details: req.body.details,
+        category: req.body.category,
+        quotedPrice: req.body.quotedPrice,
+        status: req.body.status
+      }
+    });
+    res.json(updatedInquiry);
+  } catch (error) {
+    console.error('Error updating inquiry:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 export default router;

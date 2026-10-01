@@ -66,8 +66,8 @@ router.delete('/:clientId', async (req: Request, res: Response) => {
   } catch (error: any) {
     // P2003 triggers if the client still has connected sales records
     if (error.code === 'P2003') {
-      return res.status(400).json({ 
-        error: 'Cannot delete client: This client still has existing sales/invoices attached.' 
+      return res.status(400).json({
+        error: 'Cannot delete client: This client still has existing sales/invoices attached.'
       });
     }
     console.error('Error deleting client:', error);
