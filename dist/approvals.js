@@ -324,9 +324,17 @@ async function applyDelete(tx, request) {
             await tx.inquiries.update({ where: { inquiryId: id }, data: { deletedAt: now } });
             return;
         }
-        case 'EXPENSE':
+        case 'EXPENSE': {
+            const expense = await tx.expenses.findFirst({ where: { expenseId: id, deletedAt: null }, include: { inventory: true } });
+            if (!expense)
+                throw new Error('Expense is no longer active.');
             await tx.expenses.update({ where: { expenseId: id }, data: { deletedAt: now } });
+            if (expense.inventory && !expense.inventory.deletedAt) {
+                await tx.inventory.update({ where: { referenceId: expense.inventory.referenceId }, data: { deletedAt: now } });
+                await (0, inventoryLedger_1.recalculateInventory)(tx);
+            }
             return;
+        }
         case 'INVENTORY': {
             await tx.inventory.update({ where: { referenceId: id }, data: { deletedAt: now } });
             const movement = await tx.inventory.findUniqueOrThrow({ where: { referenceId: id } });

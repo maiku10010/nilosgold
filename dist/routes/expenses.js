@@ -4,6 +4,7 @@ const express_1 = require("express");
 const db_1 = require("../db");
 const validation_1 = require("../validation");
 const friendlyId_1 = require("../friendlyId");
+const inventoryLedger_1 = require("../inventoryLedger");
 const router = (0, express_1.Router)();
 //create operation for expenses
 router.post('/', async (req, res) => {
@@ -76,8 +77,19 @@ router.delete('/:expenseId', async (req, res) => {
         const targetId = Array.isArray(req.params.expenseId)
             ? req.params.expenseId[0]
             : req.params.expenseId;
-        const deleted = await db_1.prisma.expenses.updateMany({ where: { expenseId: targetId, deletedAt: null }, data: { deletedAt: new Date() } });
-        if (!deleted.count)
+        const deleted = await db_1.prisma.$transaction(async (tx) => {
+            const expense = await tx.expenses.findFirst({ where: { expenseId: targetId, deletedAt: null }, include: { inventory: true } });
+            if (!expense)
+                return false;
+            const deletedAt = new Date();
+            await tx.expenses.update({ where: { expenseId: targetId }, data: { deletedAt } });
+            if (expense.inventory && !expense.inventory.deletedAt) {
+                await tx.inventory.update({ where: { referenceId: expense.inventory.referenceId }, data: { deletedAt } });
+                await (0, inventoryLedger_1.recalculateInventory)(tx);
+            }
+            return true;
+        });
+        if (!deleted)
             return res.status(404).json({ error: 'Expense not found or already archived.' });
         res.json({ message: 'Expense record successfully deleted' });
     }
