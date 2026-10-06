@@ -6,7 +6,6 @@ exports.isNonNegativeNumber = isNonNegativeNumber;
 exports.isPositiveNumber = isPositiveNumber;
 exports.isValidPHContact = isValidPHContact;
 exports.isValidEmail = isValidEmail;
-exports.meetsMinimumDownPayment = meetsMinimumDownPayment;
 const dateParts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Manila",
     year: "numeric",
@@ -37,9 +36,4 @@ function isValidPHContact(value) {
 }
 function isValidEmail(value) {
     return typeof value === 'string' && exports.EMAIL_PATTERN.test(value.trim());
-}
-function meetsMinimumDownPayment(downpayment, price) {
-    const down = Number(downpayment);
-    const total = Number(price);
-    return Number.isFinite(down) && Number.isFinite(total) && total > 0 && down >= total * 0.25;
 }

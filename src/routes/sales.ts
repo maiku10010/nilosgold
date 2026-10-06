@@ -1,6 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { prisma } from '../db';
-import { isNonNegativeNumber, isPositiveNumber, isValidNonFutureDate, isValidPHContact, meetsMinimumDownPayment, isValidEmail } from '../validation';
+import { isNonNegativeNumber, isPositiveNumber, isValidNonFutureDate, isValidPHContact, isValidEmail } from '../validation';
 import { receiptEmail, sendSystemEmail } from '../services/email';
 import { friendlyId } from '../friendlyId';
 import { recalculateInventory } from '../inventoryLedger';
@@ -73,24 +73,15 @@ router.post('/:invoiceId/finish', async (req: Request, res: Response) => {
 
       const otherSales = await tx.sales.findMany({
         where: { clientId: current.clientId, invoiceId: { not: invoiceId }, deletedAt: null },
-        select: { price: true, downpayment: true },
+        select: { price: true, payment: true },
       });
-      const balance = otherSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0)
-        + Math.max(0, Number(finished.price) - Number(finished.downpayment));
+      const balance = otherSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.payment)), 0)
+        + Math.max(0, Number(finished.price) - Number(finished.payment));
       await tx.client.update({ where: { clientId: current.clientId }, data: { balance } });
 
       return tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes });
     });
-    let notification: { sent: boolean; reason?: string } = { sent: false, reason: 'Customer email is missing.' };
-    if (sale.receiptSentAt) notification = { sent: true, reason: 'Receipt email was already sent.' };
-    else {
-      notification = await sendSystemEmail(sale.client.email, `Official Receipt · ${sale.invoiceId}`, receiptEmail(sale), `official-receipt-${sale.invoiceId}`);
-      if (notification.sent) {
-        await prisma.sales.update({ where: { invoiceId: sale.invoiceId }, data: { receiptSentAt: new Date() } });
-        sale.receiptSentAt = new Date();
-      }
-    }
-    res.json({ ...sale, notification });
+    res.json(sale);
   } catch (error) {
     const statusCode = Number((error as { statusCode?: number })?.statusCode);
     if (statusCode) return res.status(statusCode).json({ error: (error as Error).message });
@@ -99,14 +90,40 @@ router.post('/:invoiceId/finish', async (req: Request, res: Response) => {
   }
 });
 
+router.post('/:invoiceId/receipt', async (req: Request, res: Response) => {
+  try {
+    const invoiceId = Array.isArray(req.params.invoiceId) ? req.params.invoiceId[0] : req.params.invoiceId;
+    if (req.body.confirm !== true || req.body.invoiceId !== invoiceId) {
+      return res.status(400).json({ error: 'Confirm the exact invoice in Daily Sales before sending its receipt.' });
+    }
+    const sale = await prisma.sales.findFirst({ where: { invoiceId, deletedAt: null }, include: saleIncludes });
+    if (!sale || sale.status !== 'FINISHED') return res.status(404).json({ error: 'Finished sale not found.' });
+    if (sale.receiptSentAt) return res.status(409).json({ error: 'The receipt has already been sent.' });
+
+    const notification = await sendSystemEmail(
+      sale.client.email,
+      `Official Receipt · ${sale.invoiceId}`,
+      receiptEmail(sale),
+      `official-receipt-${sale.invoiceId}`,
+    );
+    const updated = notification.sent
+      ? await prisma.sales.update({ where: { invoiceId }, data: { receiptSentAt: new Date() }, include: saleIncludes })
+      : sale;
+    res.json({ ...updated, notification });
+  } catch (error) {
+    console.error('Error sending receipt:', error);
+    res.status(500).json({ error: 'Receipt could not be sent.' });
+  }
+});
+
 router.put('/:invoiceId', async (req: Request, res: Response) => {
   try {
     const invoiceId = Array.isArray(req.params.invoiceId) ? req.params.invoiceId[0] : req.params.invoiceId;
     const date = req.body.salesDate ?? req.body.date;
-    const downpayment = Number(req.body.downpayment ?? 0);
+    const payment = Number(req.body.payment ?? 0);
     const price = Number(req.body.price);
-    if (!isPositiveNumber(price) || !meetsMinimumDownPayment(downpayment, price) || downpayment > price) {
-      return res.status(400).json({ error: 'Down payment must be at least 25% of the total price and no greater than the total price.' });
+    if (!isPositiveNumber(price) || !isNonNegativeNumber(payment) || payment > price) {
+      return res.status(400).json({ error: 'Payment must be zero or greater and no greater than the total price.' });
     }
     if (req.body.contactNum !== undefined && !isValidPHContact(req.body.contactNum)) return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
     if (req.body.email !== undefined && req.body.email !== null && req.body.email !== '' && !isValidEmail(req.body.email)) return res.status(400).json({ error: 'Enter a valid email address.' });
@@ -129,7 +146,7 @@ router.put('/:invoiceId', async (req: Request, res: Response) => {
         data: {
           serviceType: req.body.serviceType,
           price,
-          downpayment,
+          payment,
           ...(date ? { salesDate: new Date(`${date}T00:00:00`) } : {}),
           client: { update: {
             ...(typeof req.body.contactNum === 'string' ? { contactNum: req.body.contactNum.trim() } : {}),
@@ -138,12 +155,12 @@ router.put('/:invoiceId', async (req: Request, res: Response) => {
       });
       const outstandingSales = await tx.sales.findMany({
         where: { clientId: current.clientId, deletedAt: null },
-        select: { price: true, downpayment: true },
+        select: { price: true, payment: true },
       });
-      const updatedAmounts = await tx.sales.findMany({ where: { clientId: current.clientId, deletedAt: null }, select: { price: true, downpayment: true } });
+      const updatedAmounts = await tx.sales.findMany({ where: { clientId: current.clientId, deletedAt: null }, select: { price: true, payment: true } });
       await tx.client.update({ where: { clientId: current.clientId }, data: {
         clientName: req.body.clientName.trim(),
-        balance: updatedAmounts.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0),
+        balance: updatedAmounts.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.payment)), 0),
       } });
       return tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes });
     });
@@ -172,9 +189,9 @@ router.delete('/:invoiceId', async (req: Request, res: Response) => {
       } else {
         await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
       }
-      const remainingSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, downpayment: true } });
+      const remainingSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, payment: true } });
       await tx.client.update({ where: { clientId: sale.clientId }, data: {
-        balance: remainingSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0),
+        balance: remainingSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.payment)), 0),
       } });
     });
     res.json({ message: 'Sale deleted; its inquiry has been reopened when applicable.' });

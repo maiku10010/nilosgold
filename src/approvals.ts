@@ -16,10 +16,10 @@ function requestSpec(req: Request): Spec | null {
   if (segments.length !== 2 || !segments[1]) return null;
   const [resource, id] = segments;
   const resourceSpecs: Record<string, { entity: Entity; allowed: string[] }> = {
-    sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'downpayment', 'salesDate', 'date', 'clientName', 'contactNum'] },
+    sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'payment', 'salesDate', 'date', 'clientName', 'contactNum'] },
     'job-cost': { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
     job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
-    inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'date', 'inqDate'] },
+    inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'isFullyPaid', 'date', 'inqDate'] },
     expenses: { entity: 'EXPENSE', allowed: ['category', 'amount', 'description', 'expDate', 'date'] },
     inventory: { entity: 'INVENTORY', allowed: ['itemName', 'category', 'quantityIn', 'quantityOut', 'quantityLoss', 'goldIn', 'goldOut', 'scraps', 'scrap', 'totalGold', 'balance', 'unit', 'unitPrice', 'date', 'updatedAt'] },
     // Client balance is derived from invoices and must never be manually edited.
@@ -44,7 +44,7 @@ async function findCurrent(entity: Entity, id: string): Promise<any> {
   }
 }
 
-const numericFields = new Set(['price', 'downpayment', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'totalGold', 'quantityIn', 'quantityOut', 'quantityLoss', 'unitPrice']);
+const numericFields = new Set(['price', 'payment', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'totalGold', 'quantityIn', 'quantityOut', 'quantityLoss', 'unitPrice']);
 const positiveFields = new Set(['price', 'goldCostPerG', 'sellingPrice', 'amount']);
 const nullableStringFields = new Set(['contactInfo', 'email', 'details', 'description', 'contactNum']);
 function normalizedChanges(body: Record<string, unknown>, spec: Spec): Record<string, unknown> {
@@ -59,6 +59,8 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec): Record<st
       const value = Number(raw);
       if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0)) throw new Error(`Enter a valid ${key}.`);
       changes[key] = value;
+    } else if (key === 'isFullyPaid' && typeof raw === 'boolean') {
+      changes[key] = raw;
     } else if (['date', 'salesDate', 'inqDate', 'expDate', 'updatedAt', 'deadline', 'deliveryDate'].includes(key)) {
       if (typeof raw !== 'string' || !raw || Number.isNaN(Date.parse(raw))) throw new Error('Enter a valid date.');
       const date = new Date(raw.length === 10 ? `${raw}T00:00:00` : raw);
@@ -108,8 +110,8 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
       }
       if (spec.entity === 'SALE') {
         const nextPrice = Number(proposedData.price ?? current.price);
-        const nextDownpayment = Number(proposedData.downpayment ?? current.downpayment);
-        if (nextDownpayment > nextPrice) { res.status(400).json({ error: 'Downpayment cannot exceed the sale price.' }); return; }
+        const nextPayment = Number(proposedData.payment ?? current.payment);
+        if (nextPayment > nextPrice) { res.status(400).json({ error: 'Payment cannot exceed the sale price.' }); return; }
       }
       if (spec.entity === 'SALE' && current.status === 'PENDING') { res.status(409).json({ error: 'Update this invoice from its pending job costing.' }); return; }
       if (spec.entity === 'INQUIRY' && (current.status !== 'PENDING' || current.jobCost)) { res.status(409).json({ error: 'Only pending inquiries without a job costing can be edited.' }); return; }
@@ -143,7 +145,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       await tx.sales.update({ where: { invoiceId: id }, data: {
         ...(changes.serviceType !== undefined ? { serviceType: changes.serviceType as string } : {}),
         ...(changes.price !== undefined ? { price: changes.price as number } : {}),
-        ...(changes.downpayment !== undefined ? { downpayment: changes.downpayment as number } : {}),
+        ...(changes.payment !== undefined ? { payment: changes.payment as number } : {}),
         ...(changes.salesDate || changes.date ? { salesDate: date('salesDate') ?? date('date') } : {}),
       } });
       const clientData = request.proposedData as Record<string, unknown> | null;
@@ -151,8 +153,8 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
         ? { ...(typeof clientData.clientName === 'string' ? { clientName: clientData.clientName } : {}), ...(clientData.contactNum !== undefined ? { contactNum: clientData.contactNum as string | null } : {}) }
         : null;
       if (clientChanges) await tx.client.update({ where: { clientId: sale.clientId }, data: clientChanges });
-      const relatedSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, downpayment: true } });
-      await tx.client.update({ where: { clientId: sale.clientId }, data: { balance: relatedSales.reduce((sum, row) => sum + Math.max(0, Number(row.price) - Number(row.downpayment)), 0) } });
+      const relatedSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, payment: true } });
+      await tx.client.update({ where: { clientId: sale.clientId }, data: { balance: relatedSales.reduce((sum, row) => sum + Math.max(0, Number(row.price) - Number(row.payment)), 0) } });
       return;
     }
     case 'JOB_COST': {
@@ -185,6 +187,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       ...(changes.details !== undefined ? { details: changes.details as string | null } : {}),
       ...(changes.category !== undefined ? { category: changes.category as string } : {}),
       ...(changes.quotedPrice !== undefined ? { quotedPrice: changes.quotedPrice as number } : {}),
+      ...(changes.isFullyPaid !== undefined ? { isFullyPaid: changes.isFullyPaid as boolean } : {}),
       ...(changes.date || changes.inqDate ? { inqDate: date('inqDate') ?? date('date') } : {}),
     } }); return;
     case 'EXPENSE': await tx.expenses.update({ where: { expenseId: id }, data: {
@@ -235,8 +238,8 @@ async function applyDelete(tx: Prisma.TransactionClient, request: any): Promise<
         await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: now, inquiryId: null } });
         if (sale.job.inquiryId) await tx.inquiries.update({ where: { inquiryId: sale.job.inquiryId }, data: { status: 'PENDING' } });
       }
-      const activeSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, downpayment: true } });
-      await tx.client.update({ where: { clientId: sale.clientId }, data: { balance: activeSales.reduce((sum, row) => sum + Math.max(0, Number(row.price) - Number(row.downpayment)), 0) } });
+      const activeSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, payment: true } });
+      await tx.client.update({ where: { clientId: sale.clientId }, data: { balance: activeSales.reduce((sum, row) => sum + Math.max(0, Number(row.price) - Number(row.payment)), 0) } });
       return;
     }
     case 'JOB_COST': {

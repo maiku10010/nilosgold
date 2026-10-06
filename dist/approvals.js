@@ -14,10 +14,10 @@ function requestSpec(req) {
         return null;
     const [resource, id] = segments;
     const resourceSpecs = {
-        sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'downpayment', 'salesDate', 'date', 'clientName', 'contactNum'] },
+        sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'payment', 'salesDate', 'date', 'clientName', 'contactNum'] },
         'job-cost': { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
         job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
-        inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'date', 'inqDate'] },
+        inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'isFullyPaid', 'date', 'inqDate'] },
         expenses: { entity: 'EXPENSE', allowed: ['category', 'amount', 'description', 'expDate', 'date'] },
         inventory: { entity: 'INVENTORY', allowed: ['itemName', 'category', 'quantityIn', 'quantityOut', 'quantityLoss', 'goldIn', 'goldOut', 'scraps', 'scrap', 'totalGold', 'balance', 'unit', 'unitPrice', 'date', 'updatedAt'] },
         // Client balance is derived from invoices and must never be manually edited.
@@ -39,7 +39,7 @@ async function findCurrent(entity, id) {
         case 'CLIENT': return db_1.prisma.client.findFirst({ where: { clientId: id, deletedAt: null } });
     }
 }
-const numericFields = new Set(['price', 'downpayment', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'totalGold', 'quantityIn', 'quantityOut', 'quantityLoss', 'unitPrice']);
+const numericFields = new Set(['price', 'payment', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'totalGold', 'quantityIn', 'quantityOut', 'quantityLoss', 'unitPrice']);
 const positiveFields = new Set(['price', 'goldCostPerG', 'sellingPrice', 'amount']);
 const nullableStringFields = new Set(['contactInfo', 'email', 'details', 'description', 'contactNum']);
 function normalizedChanges(body, spec) {
@@ -57,6 +57,9 @@ function normalizedChanges(body, spec) {
             if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0))
                 throw new Error(`Enter a valid ${key}.`);
             changes[key] = value;
+        }
+        else if (key === 'isFullyPaid' && typeof raw === 'boolean') {
+            changes[key] = raw;
         }
         else if (['date', 'salesDate', 'inqDate', 'expDate', 'updatedAt', 'deadline', 'deliveryDate'].includes(key)) {
             if (typeof raw !== 'string' || !raw || Number.isNaN(Date.parse(raw)))
@@ -140,9 +143,9 @@ async function queueStaffChanges(req, res, next) {
             }
             if (spec.entity === 'SALE') {
                 const nextPrice = Number(proposedData.price ?? current.price);
-                const nextDownpayment = Number(proposedData.downpayment ?? current.downpayment);
-                if (nextDownpayment > nextPrice) {
-                    res.status(400).json({ error: 'Downpayment cannot exceed the sale price.' });
+                const nextPayment = Number(proposedData.payment ?? current.payment);
+                if (nextPayment > nextPrice) {
+                    res.status(400).json({ error: 'Payment cannot exceed the sale price.' });
                     return;
                 }
             }
@@ -188,7 +191,7 @@ async function applyUpdate(tx, request, changes) {
             await tx.sales.update({ where: { invoiceId: id }, data: {
                     ...(changes.serviceType !== undefined ? { serviceType: changes.serviceType } : {}),
                     ...(changes.price !== undefined ? { price: changes.price } : {}),
-                    ...(changes.downpayment !== undefined ? { downpayment: changes.downpayment } : {}),
+                    ...(changes.payment !== undefined ? { payment: changes.payment } : {}),
                     ...(changes.salesDate || changes.date ? { salesDate: date('salesDate') ?? date('date') } : {}),
                 } });
             const clientData = request.proposedData;
@@ -197,8 +200,8 @@ async function applyUpdate(tx, request, changes) {
                 : null;
             if (clientChanges)
                 await tx.client.update({ where: { clientId: sale.clientId }, data: clientChanges });
-            const relatedSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, downpayment: true } });
-            await tx.client.update({ where: { clientId: sale.clientId }, data: { balance: relatedSales.reduce((sum, row) => sum + Math.max(0, Number(row.price) - Number(row.downpayment)), 0) } });
+            const relatedSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, payment: true } });
+            await tx.client.update({ where: { clientId: sale.clientId }, data: { balance: relatedSales.reduce((sum, row) => sum + Math.max(0, Number(row.price) - Number(row.payment)), 0) } });
             return;
         }
         case 'JOB_COST': {
@@ -237,6 +240,7 @@ async function applyUpdate(tx, request, changes) {
                     ...(changes.details !== undefined ? { details: changes.details } : {}),
                     ...(changes.category !== undefined ? { category: changes.category } : {}),
                     ...(changes.quotedPrice !== undefined ? { quotedPrice: changes.quotedPrice } : {}),
+                    ...(changes.isFullyPaid !== undefined ? { isFullyPaid: changes.isFullyPaid } : {}),
                     ...(changes.date || changes.inqDate ? { inqDate: date('inqDate') ?? date('date') } : {}),
                 } });
             return;
@@ -295,8 +299,8 @@ async function applyDelete(tx, request) {
                 if (sale.job.inquiryId)
                     await tx.inquiries.update({ where: { inquiryId: sale.job.inquiryId }, data: { status: 'PENDING' } });
             }
-            const activeSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, downpayment: true } });
-            await tx.client.update({ where: { clientId: sale.clientId }, data: { balance: activeSales.reduce((sum, row) => sum + Math.max(0, Number(row.price) - Number(row.downpayment)), 0) } });
+            const activeSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, payment: true } });
+            await tx.client.update({ where: { clientId: sale.clientId }, data: { balance: activeSales.reduce((sum, row) => sum + Math.max(0, Number(row.price) - Number(row.payment)), 0) } });
             return;
         }
         case 'JOB_COST': {

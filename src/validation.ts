@@ -31,7 +31,3 @@ export function isValidPHContact(value: unknown): boolean {
 export function isValidEmail(value: unknown): boolean {
   return typeof value === 'string' && EMAIL_PATTERN.test(value.trim());
 }
-export function meetsMinimumDownPayment(downpayment: unknown, price: unknown): boolean {
-  const down = Number(downpayment); const total = Number(price);
-  return Number.isFinite(down) && Number.isFinite(total) && total > 0 && down >= total * 0.25;
-}

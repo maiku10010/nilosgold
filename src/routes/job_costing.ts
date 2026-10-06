@@ -103,7 +103,7 @@ router.post('/', async (req: Request, res: Response) => {
           universalReferenceId: createdJob.universalReferenceId,
           serviceType,
           price: sellingPrice,
-          downpayment: 0,
+          payment: 0,
           status: 'PENDING',
           client: { connect: { clientId: client.clientId } },
           job: { connect: { jobCostId: createdJob.jobCostId } },
@@ -240,11 +240,11 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       if (existing.sales.status === 'FINISHED') {
         const otherSales = await tx.sales.findMany({
           where: { clientId: existing.sales.clientId, invoiceId: { not: existing.sales.invoiceId } },
-          select: { price: true, downpayment: true },
+          select: { price: true, payment: true },
         });
         await tx.client.update({
           where: { clientId: existing.sales.clientId },
-          data: { balance: otherSales.reduce((sum, sale) => sum + Math.max(0, Number(sale.price) - Number(sale.downpayment)), Math.max(0, sellingPrice - Number(existing.sales.downpayment))) },
+          data: { balance: otherSales.reduce((sum, sale) => sum + Math.max(0, Number(sale.price) - Number(sale.payment)), Math.max(0, sellingPrice - Number(existing.sales.payment))) },
         });
       }
       return tx.job_Cost.findUniqueOrThrow({ where: { jobCostId }, include: includeJob });
@@ -267,9 +267,9 @@ router.delete('/:jobCostId', async (req: Request, res: Response) => {
       if (job.sales) {
         const { clientId, invoiceId } = job.sales;
         await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
-        const remainingSales = await tx.sales.findMany({ where: { clientId, deletedAt: null }, select: { price: true, downpayment: true } });
+        const remainingSales = await tx.sales.findMany({ where: { clientId, deletedAt: null }, select: { price: true, payment: true } });
         await tx.client.update({ where: { clientId }, data: {
-          balance: remainingSales.reduce((sum, sale) => sum + Math.max(0, Number(sale.price) - Number(sale.downpayment)), 0),
+          balance: remainingSales.reduce((sum, sale) => sum + Math.max(0, Number(sale.price) - Number(sale.payment)), 0),
         } });
       }
       await tx.job_Cost.update({ where: { jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });

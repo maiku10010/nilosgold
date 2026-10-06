@@ -81,6 +81,7 @@ model Employee {
 model Inquiries {
   inquiryId    String        @id
   universalReferenceId String? @unique @map("universal_reference_id")
+  isFullyPaid Boolean @default(false)
   category     String
   quotedPrice  Decimal
   customerName String
@@ -134,7 +135,7 @@ model Sales {
   universalReferenceId String? @unique @map("universal_reference_id")
   serviceType   String
   price         Decimal
-  downpayment   Decimal     @default(0.00)
+  payment       Decimal     @default(0.00)
   status        SalesStatus @default(PAID)
   salesDate     DateTime    @default(now()) @map("date")
   receiptSentAt DateTime?

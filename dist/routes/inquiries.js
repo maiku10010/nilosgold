@@ -7,7 +7,7 @@ const validation_1 = require("../validation");
 const router = (0, express_1.Router)();
 router.post('/', async (req, res) => {
     try {
-        const { customerName, contactInfo, email, details, category, quotedPrice, clientId } = req.body;
+        const { customerName, contactInfo, email, details, category, quotedPrice, clientId, isFullyPaid } = req.body;
         const date = req.body.date;
         if (date !== undefined && !(0, validation_1.isValidNonFutureDate)(date))
             return res.status(400).json({ error: 'Inquiry date must be a valid date no later than today.' });
@@ -18,6 +18,8 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: 'Enter a valid customer email address.' });
         if (contactInfo && !(0, validation_1.isValidPHContact)(contactInfo))
             return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+        if (isFullyPaid !== undefined && typeof isFullyPaid !== 'boolean')
+            return res.status(400).json({ error: 'Fully Paid must be true or false.' });
         const inquiry = await db_1.prisma.inquiries.create({
             data: {
                 inquiryId: (0, friendlyId_1.friendlyId)(),
@@ -28,6 +30,7 @@ router.post('/', async (req, res) => {
                 details: typeof details === 'string' ? details.trim() : null,
                 category: category.trim(),
                 quotedPrice: Number(quotedPrice),
+                isFullyPaid: isFullyPaid ?? false,
                 status: 'PENDING',
                 ...(date ? { inqDate: new Date(`${date}T00:00:00`) } : {}),
                 ...(typeof clientId === 'string' && clientId ? { client: { connect: { clientId } } } : {}),
@@ -68,6 +71,8 @@ router.put('/:inquiryId', async (req, res) => {
             return res.status(400).json({ error: 'Enter a valid customer email address.' });
         if (req.body.contactInfo && !(0, validation_1.isValidPHContact)(req.body.contactInfo))
             return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+        if (req.body.isFullyPaid !== undefined && typeof req.body.isFullyPaid !== 'boolean')
+            return res.status(400).json({ error: 'Fully Paid must be true or false.' });
         const existing = await db_1.prisma.inquiries.findFirst({ where: { inquiryId, deletedAt: null }, include: { jobCost: true } });
         if (!existing)
             return res.status(404).json({ error: 'Inquiry not found.' });
@@ -82,6 +87,7 @@ router.put('/:inquiryId', async (req, res) => {
                 details: typeof req.body.details === 'string' ? req.body.details.trim() : null,
                 category: req.body.category.trim(),
                 quotedPrice: Number(req.body.quotedPrice),
+                ...(req.body.isFullyPaid !== undefined ? { isFullyPaid: req.body.isFullyPaid } : {}),
                 ...(date ? { inqDate: new Date(`${date}T00:00:00`) } : {}),
             },
             include: { client: true, jobCost: { include: { sales: true } } },
