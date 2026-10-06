@@ -19,6 +19,7 @@ router.post('/', async (req: Request, res: Response) => {
     const inquiry = await prisma.inquiries.create({
       data: {
         inquiryId: friendlyId(),
+        universalReferenceId: friendlyId(),
         customerName: customerName.trim(),
         contactInfo: typeof contactInfo === 'string' ? contactInfo.trim() : null,
         email: typeof email === 'string' && email.trim() ? email.trim() : null,

@@ -80,6 +80,7 @@ model Employee {
 
 model Inquiries {
   inquiryId    String        @id
+  universalReferenceId String? @unique @map("universal_reference_id")
   category     String
   quotedPrice  Decimal
   customerName String
@@ -101,13 +102,14 @@ model Inquiries {
 
 model Job_Cost {
   jobCostId       String    @id
+  universalReferenceId String? @unique @map("universal_reference_id")
   itemName        String?   @map("item_name")
   deadline        DateTime? @map("delivery_date")
   goldUsed        Decimal   @default(0.00)
   goldScrap       Decimal   @default(0.00) @map("gold_scrap")
   stoneCost       Decimal   @default(0.00)
   laborCost       Decimal   @default(0.00)
-  goldCostPerG    Decimal   @default(0.00)
+  goldCostPerG    Decimal   @default(0.00) @db.Decimal(12, 2)
   status          JobStatus @default(IN_PROGRESS)
   jobDate         DateTime  @default(now()) @map("date")
   readyNotifiedAt DateTime?
@@ -122,13 +124,14 @@ model Job_Cost {
   // A sale is created when the costing is finished. The sale stores the
   // invoice number and client relation used by the UI to match name + invoice.
   sales Sales?
-  inventoryMovement Inventory? @relation("JobCostInventoryMovement")
+  inventoryMovement Inventory[] @relation("JobCostInventoryMovement")
 
   @@map("job_costs")
 }
 
 model Sales {
   invoiceId     String      @id
+  universalReferenceId String? @unique @map("universal_reference_id")
   serviceType   String
   price         Decimal
   downpayment   Decimal     @default(0.00)
@@ -149,6 +152,7 @@ model Sales {
 
 model Inventory {
   referenceId String    @id
+  universalReferenceId String? @map("universal_reference_id")
   itemName    String
   unit        String
   unitPrice   Decimal   @default(0.00)
@@ -165,7 +169,7 @@ model Inventory {
   deletedAt   DateTime?
 
   costExpense Expenses? @relation("InventoryCostExpense")
-  jobCostId   String?   @unique
+  jobCostId   String?
   jobCost     Job_Cost? @relation("JobCostInventoryMovement", fields: [jobCostId], references: [jobCostId], onDelete: SetNull)
 
   @@map("inventory")

@@ -7,18 +7,24 @@ const validation_1 = require("../validation");
 const router = (0, express_1.Router)();
 router.post('/', async (req, res) => {
     try {
-        const { customerName, contactInfo, details, category, quotedPrice, clientId } = req.body;
+        const { customerName, contactInfo, email, details, category, quotedPrice, clientId } = req.body;
         const date = req.body.date;
         if (date !== undefined && !(0, validation_1.isValidNonFutureDate)(date))
             return res.status(400).json({ error: 'Inquiry date must be a valid date no later than today.' });
         if (typeof customerName !== 'string' || !customerName.trim() || typeof category !== 'string' || !category.trim() || !(0, validation_1.isNonNegativeNumber)(quotedPrice)) {
             return res.status(400).json({ error: 'Enter a customer, category, and valid quote.' });
         }
+        if (email && (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())))
+            return res.status(400).json({ error: 'Enter a valid customer email address.' });
+        if (contactInfo && !(0, validation_1.isValidPHContact)(contactInfo))
+            return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
         const inquiry = await db_1.prisma.inquiries.create({
             data: {
                 inquiryId: (0, friendlyId_1.friendlyId)(),
+                universalReferenceId: (0, friendlyId_1.friendlyId)(),
                 customerName: customerName.trim(),
                 contactInfo: typeof contactInfo === 'string' ? contactInfo.trim() : null,
+                email: typeof email === 'string' && email.trim() ? email.trim() : null,
                 details: typeof details === 'string' ? details.trim() : null,
                 category: category.trim(),
                 quotedPrice: Number(quotedPrice),
@@ -38,6 +44,7 @@ router.post('/', async (req, res) => {
 router.get('/', async (_req, res) => {
     try {
         const inquiries = await db_1.prisma.inquiries.findMany({
+            where: { deletedAt: null },
             include: { client: true, jobCost: { include: { sales: true } } },
             orderBy: { inqDate: 'desc' },
         });
@@ -57,16 +64,21 @@ router.put('/:inquiryId', async (req, res) => {
         if (typeof req.body.customerName !== 'string' || !req.body.customerName.trim() || typeof req.body.category !== 'string' || !req.body.category.trim() || !(0, validation_1.isNonNegativeNumber)(req.body.quotedPrice)) {
             return res.status(400).json({ error: 'Enter a customer, category, and valid quote.' });
         }
-        const existing = await db_1.prisma.inquiries.findUnique({ where: { inquiryId }, include: { jobCost: true } });
+        if (req.body.email && !(0, validation_1.isValidEmail)(req.body.email))
+            return res.status(400).json({ error: 'Enter a valid customer email address.' });
+        if (req.body.contactInfo && !(0, validation_1.isValidPHContact)(req.body.contactInfo))
+            return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+        const existing = await db_1.prisma.inquiries.findFirst({ where: { inquiryId, deletedAt: null }, include: { jobCost: true } });
         if (!existing)
             return res.status(404).json({ error: 'Inquiry not found.' });
-        if (existing.status !== 'PENDING' || existing.jobCost)
-            return res.status(409).json({ error: 'Only pending inquiries without job costing can be edited.' });
+        if (existing.status !== 'PENDING' || (existing.jobCost && !existing.jobCost.deletedAt))
+            return res.status(409).json({ error: 'Only pending inquiries without an active job costing can be edited.' });
         const inquiry = await db_1.prisma.inquiries.update({
             where: { inquiryId },
             data: {
                 customerName: req.body.customerName.trim(),
                 contactInfo: typeof req.body.contactInfo === 'string' ? req.body.contactInfo.trim() : null,
+                email: typeof req.body.email === 'string' && req.body.email.trim() ? req.body.email.trim() : null,
                 details: typeof req.body.details === 'string' ? req.body.details.trim() : null,
                 category: req.body.category.trim(),
                 quotedPrice: Number(req.body.quotedPrice),
@@ -84,12 +96,12 @@ router.put('/:inquiryId', async (req, res) => {
 router.delete('/:inquiryId', async (req, res) => {
     try {
         const inquiryId = Array.isArray(req.params.inquiryId) ? req.params.inquiryId[0] : req.params.inquiryId;
-        const existing = await db_1.prisma.inquiries.findUnique({ where: { inquiryId }, include: { jobCost: true } });
+        const existing = await db_1.prisma.inquiries.findFirst({ where: { inquiryId, deletedAt: null }, include: { jobCost: true } });
         if (!existing)
             return res.status(404).json({ error: 'Inquiry not found.' });
-        if (existing.jobCost)
+        if (existing.jobCost && !existing.jobCost.deletedAt)
             return res.status(409).json({ error: 'Delete the linked job costing before deleting this inquiry.' });
-        await db_1.prisma.inquiries.delete({ where: { inquiryId } });
+        await db_1.prisma.inquiries.update({ where: { inquiryId }, data: { deletedAt: new Date() } });
         res.json({ message: 'Inquiry deleted.' });
     }
     catch (error) {

@@ -22,7 +22,7 @@ router.post('/', async (req: Request, res: Response) => {
     if (requestedDeadline !== undefined && requestedDeadline !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(String(requestedDeadline)) || Number.isNaN(new Date(`${requestedDeadline}T00:00:00Z`).getTime()))) return res.status(400).json({ error: 'Enter a valid delivery date.' });
     const goldUsed = Number(req.body.goldUsed);
     const goldScrap = Number(req.body.goldScrap ?? 0);
-    const goldCostPerG = Number(req.body.goldCostPerG);
+    const goldCostPerG = Number(Number(req.body.goldCostPerG).toFixed(2));
     const stoneCost = Number(req.body.stoneCost ?? 0);
     const laborCost = Number(req.body.laborCost);
     const sellingPrice = Number(req.body.sellingPrice);
@@ -76,11 +76,12 @@ router.post('/', async (req: Request, res: Response) => {
       const createdJob = await tx.job_Cost.create({
         data: {
           jobCostId: friendlyId(),
+          universalReferenceId: inquiry.universalReferenceId ?? inquiry.inquiryId,
           itemName: typeof itemName === 'string' && itemName.trim() ? itemName.trim() : null,
           ...(requestedDeadline ? { deadline: new Date(`${requestedDeadline}T00:00:00Z`) } : {}),
           goldUsed,
           goldScrap,
-          goldCostPerG,
+          goldCostPerG: Number(Number(goldCostPerG).toFixed(2)),
           stoneCost,
           laborCost,
           status: 'PENDING',
@@ -90,7 +91,7 @@ router.post('/', async (req: Request, res: Response) => {
       });
       if (goldUsed + goldScrap > 0) {
         await tx.inventory.create({ data: {
-          referenceId: friendlyId(), itemName: createdJob.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD',
+          referenceId: friendlyId(), universalReferenceId: createdJob.universalReferenceId, itemName: createdJob.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD',
           quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap,
           unitPrice: goldCostPerG, jobCostId: createdJob.jobCostId,
         } });
@@ -99,6 +100,7 @@ router.post('/', async (req: Request, res: Response) => {
       const sale = await tx.sales.create({
         data: {
           invoiceId: friendlyId(),
+          universalReferenceId: createdJob.universalReferenceId,
           serviceType,
           price: sellingPrice,
           downpayment: 0,
@@ -180,7 +182,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
     const jobCostId = Array.isArray(req.params.jobCostId) ? req.params.jobCostId[0] : req.params.jobCostId;
     const goldUsed = Number(req.body.goldUsed);
     const goldScrap = Number(req.body.goldScrap ?? 0);
-    const goldCostPerG = Number(req.body.goldCostPerG);
+    const goldCostPerG = Number(Number(req.body.goldCostPerG).toFixed(2));
     const stoneCost = Number(req.body.stoneCost ?? 0);
     const laborCost = Number(req.body.laborCost);
     const sellingPrice = Number(req.body.sellingPrice);
@@ -198,7 +200,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       const existing = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { sales: { include: { client: true } } } });
       if (!existing) throw Object.assign(new Error('Job costing record not found.'), { statusCode: 404 });
       if (!existing.sales) throw Object.assign(new Error('This costing has no linked invoice.'), { statusCode: 409 });
-      const movement = await tx.inventory.findUnique({ where: { jobCostId } });
+      const movement = await tx.inventory.findFirst({ where: { jobCostId, category: 'GOLD' } });
       if ((goldUsed + goldScrap > 0) || movement) {
         if (movement) await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: {
           itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : existing.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD', quantityIn: 0,
@@ -206,7 +208,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
           unitPrice: goldCostPerG, updatedAt: new Date(), deletedAt: goldUsed + goldScrap > 0 ? null : new Date(),
         } });
         else await tx.inventory.create({ data: {
-          referenceId: friendlyId(), itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : existing.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD',
+          referenceId: friendlyId(), universalReferenceId: existing.universalReferenceId, itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : existing.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD',
           quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap,
           unitPrice: goldCostPerG, jobCostId,
         } });
@@ -271,9 +273,9 @@ router.delete('/:jobCostId', async (req: Request, res: Response) => {
         } });
       }
       await tx.job_Cost.update({ where: { jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
-      const movement = await tx.inventory.findUnique({ where: { jobCostId } });
-      if (movement) {
-        await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: { deletedAt: new Date() } });
+      const movements = await tx.inventory.findMany({ where: { jobCostId, deletedAt: null } });
+      if (movements.length) {
+        await tx.inventory.updateMany({ where: { jobCostId, deletedAt: null }, data: { deletedAt: new Date() } });
         await recalculateInventory(tx);
       }
       if (job.inquiryId) await tx.inquiries.update({ where: { inquiryId: job.inquiryId }, data: { status: 'PENDING' } });

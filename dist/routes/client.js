@@ -3,15 +3,21 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = require("../db");
 const friendlyId_1 = require("../friendlyId");
+const validation_1 = require("../validation");
 const router = (0, express_1.Router)();
 //create operation for client
 router.post('/', async (req, res) => {
     try {
+        if (!(0, validation_1.isValidPHContact)(req.body.contactNum))
+            return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+        if (req.body.email && !(0, validation_1.isValidEmail)(req.body.email))
+            return res.status(400).json({ error: 'Enter a valid email address.' });
         const newClient = await db_1.prisma.client.create({
             data: {
                 clientId: (0, friendlyId_1.friendlyId)(),
                 clientName: req.body.clientName,
                 contactNum: req.body.contactNum,
+                email: req.body.email || null,
                 balance: req.body.balance
             }
         });
@@ -26,7 +32,8 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const allClients = await db_1.prisma.client.findMany({
-            include: { sales: true, inquiries: true }
+            where: { deletedAt: null },
+            include: { sales: { where: { deletedAt: null } }, inquiries: { where: { deletedAt: null } } }
         });
         res.json(allClients);
     }
@@ -41,11 +48,16 @@ router.put('/:clientId', async (req, res) => {
         const targetId = Array.isArray(req.params.clientId)
             ? req.params.clientId[0]
             : req.params.clientId;
+        if (!(0, validation_1.isValidPHContact)(req.body.contactNum))
+            return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+        if (req.body.email && !(0, validation_1.isValidEmail)(req.body.email))
+            return res.status(400).json({ error: 'Enter a valid email address.' });
         const updatedClient = await db_1.prisma.client.update({
             where: { clientId: targetId },
             data: {
                 clientName: req.body.clientName,
                 contactNum: req.body.contactNum,
+                email: req.body.email ?? undefined,
                 balance: req.body.balance
             }
         });
@@ -62,9 +74,11 @@ router.delete('/:clientId', async (req, res) => {
         const targetId = Array.isArray(req.params.clientId)
             ? req.params.clientId[0]
             : req.params.clientId;
-        await db_1.prisma.client.delete({
-            where: { clientId: targetId }
+        const deleted = await db_1.prisma.client.updateMany({
+            where: { clientId: targetId, deletedAt: null }, data: { deletedAt: new Date() }
         });
+        if (!deleted.count)
+            return res.status(404).json({ error: 'Client not found or already archived.' });
         res.json({ message: 'Client successfully deleted' });
     }
     catch (error) {

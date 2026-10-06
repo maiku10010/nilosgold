@@ -1,8 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.EMAIL_PATTERN = exports.PH_CONTACT_PATTERN = void 0;
 exports.isValidNonFutureDate = isValidNonFutureDate;
 exports.isNonNegativeNumber = isNonNegativeNumber;
 exports.isPositiveNumber = isPositiveNumber;
+exports.isValidPHContact = isValidPHContact;
+exports.isValidEmail = isValidEmail;
+exports.meetsMinimumDownPayment = meetsMinimumDownPayment;
 const dateParts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Manila",
     year: "numeric",
@@ -25,4 +29,17 @@ function isNonNegativeNumber(value) {
 function isPositiveNumber(value) {
     const parsed = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
     return Number.isFinite(parsed) && parsed > 0;
+}
+exports.PH_CONTACT_PATTERN = /^(09\d{9}|\+639\d{9})$/;
+exports.EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function isValidPHContact(value) {
+    return typeof value === 'string' && exports.PH_CONTACT_PATTERN.test(value.trim().replace(/[ -]/g, ''));
+}
+function isValidEmail(value) {
+    return typeof value === 'string' && exports.EMAIL_PATTERN.test(value.trim());
+}
+function meetsMinimumDownPayment(downpayment, price) {
+    const down = Number(downpayment);
+    const total = Number(price);
+    return Number.isFinite(down) && Number.isFinite(total) && total > 0 && down >= total * 0.25;
 }

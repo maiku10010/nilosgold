@@ -19,7 +19,7 @@ router.get('/', async (req: Request, res: Response) => {
     const revenue = sales.reduce((sum, sale) => sum + Number(sale.price), 0);
     const jobCost = sales.reduce((sum, sale) => {
       if (!sale.job || sale.job.deletedAt) return sum;
-      return sum + Number(sale.job.goldUsed) * Number(sale.job.goldCostPerG) + Number(sale.job.stoneCost) + Number(sale.job.laborCost);
+      return sum + Number((Number(sale.job.goldUsed) * Number(sale.job.goldCostPerG)).toFixed(2)) + Number(sale.job.stoneCost) + Number(sale.job.laborCost);
     }, 0);
     const operatingExpenses = Number(expenses._sum.amount ?? 0);
     res.json({ start: start.toISOString(), end: end.toISOString(), revenue, jobCost, grossProfit: revenue - jobCost, expenses: operatingExpenses, netProfit: revenue - jobCost - operatingExpenses, netMargin: revenue ? ((revenue - jobCost - operatingExpenses) / revenue) * 100 : 0, inquiries, salesCount: sales.length });

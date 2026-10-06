@@ -3,6 +3,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = require("../db");
 const validation_1 = require("../validation");
+const email_1 = require("../services/email");
+const friendlyId_1 = require("../friendlyId");
+const inventoryLedger_1 = require("../inventoryLedger");
 const router = (0, express_1.Router)();
 const serviceTypes = ['Custom', 'Repair', 'Resize', 'Cleaning'];
 const saleIncludes = { client: true, job: { include: { inquiry: true } } };
@@ -13,7 +16,7 @@ router.post('/', (_req, res) => {
 });
 router.get('/', async (_req, res) => {
     try {
-        const sales = await db_1.prisma.sales.findMany({ include: saleIncludes, orderBy: { salesDate: 'desc' } });
+        const sales = await db_1.prisma.sales.findMany({ where: { deletedAt: null }, include: saleIncludes, orderBy: { salesDate: 'desc' } });
         res.json(sales);
     }
     catch (error) {
@@ -33,12 +36,33 @@ router.post('/:invoiceId/finish', async (req, res) => {
             const current = await tx.sales.findUnique({ where: { invoiceId }, include: { client: true, job: { include: { inquiry: true } } } });
             if (!current)
                 throw Object.assign(new Error('Invoice not found.'), { statusCode: 404 });
+            if (current.deletedAt)
+                throw Object.assign(new Error('Invoice not found.'), { statusCode: 404 });
             if (current.client.clientName.trim().toLocaleLowerCase() !== clientName.toLocaleLowerCase()) {
                 throw Object.assign(new Error('The client name and invoice number do not match.'), { statusCode: 409 });
             }
-            if (current.status !== 'PENDING' || !current.job || current.job.status !== 'APPROVED') {
+            if (current.status !== 'PENDING' || !current.job || current.job.deletedAt || !['APPROVED', 'READY_FOR_PICKUP'].includes(current.job.status)) {
                 throw Object.assign(new Error('Only an approved job costing can be moved to Daily Sales.'), { statusCode: 409 });
             }
+            const materials = Array.isArray(req.body.materials) ? req.body.materials : [];
+            if (materials.some((item) => !item || typeof item.referenceId !== 'string' || !(0, validation_1.isPositiveNumber)(item.quantity))) {
+                throw Object.assign(new Error('Choose valid inventory items and positive quantities.'), { statusCode: 400 });
+            }
+            const deductions = new Map();
+            for (const item of materials)
+                deductions.set(item.referenceId, (deductions.get(item.referenceId) ?? 0) + Number(item.quantity));
+            for (const [referenceId, quantity] of deductions) {
+                const stock = await tx.inventory.findFirst({ where: { referenceId, deletedAt: null } });
+                if (!stock || stock.category === 'GOLD' || stock.category === 'TOOLS')
+                    throw Object.assign(new Error('Choose an active packaging or material inventory item.'), { statusCode: 400 });
+                await tx.inventory.create({ data: {
+                        referenceId: (0, friendlyId_1.friendlyId)(), universalReferenceId: current.job.universalReferenceId,
+                        jobCostId: current.job.jobCostId, itemName: stock.itemName, category: stock.category, unit: stock.unit,
+                        quantityOut: quantity, unitPrice: stock.unitPrice, updatedAt: new Date(),
+                    } });
+            }
+            if (deductions.size)
+                await (0, inventoryLedger_1.recalculateInventory)(tx);
             const finished = await tx.sales.update({
                 where: { invoiceId },
                 data: { status: 'FINISHED', salesDate: new Date() },
@@ -48,7 +72,7 @@ router.post('/:invoiceId/finish', async (req, res) => {
                 await tx.inquiries.update({ where: { inquiryId: current.job.inquiryId }, data: { status: 'FINISHED' } });
             }
             const otherSales = await tx.sales.findMany({
-                where: { clientId: current.clientId, invoiceId: { not: invoiceId } },
+                where: { clientId: current.clientId, invoiceId: { not: invoiceId }, deletedAt: null },
                 select: { price: true, downpayment: true },
             });
             const balance = otherSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0)
@@ -56,7 +80,17 @@ router.post('/:invoiceId/finish', async (req, res) => {
             await tx.client.update({ where: { clientId: current.clientId }, data: { balance } });
             return tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes });
         });
-        res.json(sale);
+        let notification = { sent: false, reason: 'Customer email is missing.' };
+        if (sale.receiptSentAt)
+            notification = { sent: true, reason: 'Receipt email was already sent.' };
+        else {
+            notification = await (0, email_1.sendSystemEmail)(sale.client.email, `Official Receipt · ${sale.invoiceId}`, (0, email_1.receiptEmail)(sale), `official-receipt-${sale.invoiceId}`);
+            if (notification.sent) {
+                await db_1.prisma.sales.update({ where: { invoiceId: sale.invoiceId }, data: { receiptSentAt: new Date() } });
+                sale.receiptSentAt = new Date();
+            }
+        }
+        res.json({ ...sale, notification });
     }
     catch (error) {
         const statusCode = Number(error?.statusCode);
@@ -72,9 +106,13 @@ router.put('/:invoiceId', async (req, res) => {
         const date = req.body.salesDate ?? req.body.date;
         const downpayment = Number(req.body.downpayment ?? 0);
         const price = Number(req.body.price);
-        if (!(0, validation_1.isPositiveNumber)(price) || !(0, validation_1.isNonNegativeNumber)(downpayment) || downpayment > price) {
-            return res.status(400).json({ error: 'Enter a valid price and a downpayment no greater than the total price.' });
+        if (!(0, validation_1.isPositiveNumber)(price) || !(0, validation_1.meetsMinimumDownPayment)(downpayment, price) || downpayment > price) {
+            return res.status(400).json({ error: 'Down payment must be at least 25% of the total price and no greater than the total price.' });
         }
+        if (req.body.contactNum !== undefined && !(0, validation_1.isValidPHContact)(req.body.contactNum))
+            return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+        if (req.body.email !== undefined && req.body.email !== null && req.body.email !== '' && !(0, validation_1.isValidEmail)(req.body.email))
+            return res.status(400).json({ error: 'Enter a valid email address.' });
         if (date !== undefined && !(0, validation_1.isValidNonFutureDate)(date))
             return res.status(400).json({ error: 'Sale date must be a valid date no later than today.' });
         if (!serviceTypes.includes(req.body.serviceType))
@@ -83,7 +121,7 @@ router.put('/:invoiceId', async (req, res) => {
             return res.status(400).json({ error: 'The client name and invoice number are required to update a sale.' });
         }
         const updated = await db_1.prisma.$transaction(async (tx) => {
-            const current = await tx.sales.findUnique({ where: { invoiceId }, include: { client: true } });
+            const current = await tx.sales.findFirst({ where: { invoiceId, deletedAt: null }, include: { client: true } });
             if (!current)
                 throw Object.assign(new Error('Invoice not found.'), { statusCode: 404 });
             if (current.status === 'PENDING')
@@ -104,12 +142,13 @@ router.put('/:invoiceId', async (req, res) => {
                 },
             });
             const outstandingSales = await tx.sales.findMany({
-                where: { clientId: current.clientId },
+                where: { clientId: current.clientId, deletedAt: null },
                 select: { price: true, downpayment: true },
             });
+            const updatedAmounts = await tx.sales.findMany({ where: { clientId: current.clientId, deletedAt: null }, select: { price: true, downpayment: true } });
             await tx.client.update({ where: { clientId: current.clientId }, data: {
                     clientName: req.body.clientName.trim(),
-                    balance: outstandingSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0),
+                    balance: updatedAmounts.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0),
                 } });
             return tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes });
         });
@@ -127,20 +166,22 @@ router.delete('/:invoiceId', async (req, res) => {
     try {
         const invoiceId = Array.isArray(req.params.invoiceId) ? req.params.invoiceId[0] : req.params.invoiceId;
         await db_1.prisma.$transaction(async (tx) => {
-            const sale = await tx.sales.findUnique({ where: { invoiceId }, include: { job: true } });
+            const sale = await tx.sales.findFirst({ where: { invoiceId, deletedAt: null }, include: { job: true } });
             if (!sale)
                 throw Object.assign(new Error('Invoice not found.'), { statusCode: 404 });
             if (sale.job) {
                 const inquiryId = sale.job.inquiryId;
-                await tx.sales.delete({ where: { invoiceId } });
-                await tx.job_Cost.delete({ where: { jobCostId: sale.job.jobCostId } });
+                await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
+                await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
+                await tx.inventory.updateMany({ where: { jobCostId: sale.job.jobCostId, deletedAt: null }, data: { deletedAt: new Date() } });
+                await (0, inventoryLedger_1.recalculateInventory)(tx);
                 if (inquiryId)
                     await tx.inquiries.update({ where: { inquiryId }, data: { status: 'PENDING' } });
             }
             else {
-                await tx.sales.delete({ where: { invoiceId } });
+                await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
             }
-            const remainingSales = await tx.sales.findMany({ where: { clientId: sale.clientId }, select: { price: true, downpayment: true } });
+            const remainingSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, downpayment: true } });
             await tx.client.update({ where: { clientId: sale.clientId }, data: {
                     balance: remainingSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.downpayment)), 0),
                 } });

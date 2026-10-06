@@ -32,7 +32,7 @@ router.post('/', async (req, res) => {
 //read operation for expenses
 router.get('/', async (req, res) => {
     try {
-        const allExpenses = await db_1.prisma.expenses.findMany();
+        const allExpenses = await db_1.prisma.expenses.findMany({ where: { deletedAt: null }, orderBy: { expDate: 'desc' } });
         res.json(allExpenses);
     }
     catch (error) {
@@ -51,6 +51,9 @@ router.put('/:expenseId', async (req, res) => {
             return res.status(400).json({ error: 'Expense date must be a valid date no later than today.' });
         if (typeof req.body.category !== 'string' || !req.body.category.trim() || typeof req.body.description !== 'string' || !req.body.description.trim() || !(0, validation_1.isPositiveNumber)(req.body.amount))
             return res.status(400).json({ error: 'Enter a category, description, and an amount greater than zero.' });
+        const existing = await db_1.prisma.expenses.findFirst({ where: { expenseId: targetId, deletedAt: null } });
+        if (!existing)
+            return res.status(404).json({ error: 'Expense not found or already archived.' });
         const updatedExpense = await db_1.prisma.expenses.update({
             where: { expenseId: targetId },
             data: {
@@ -73,9 +76,9 @@ router.delete('/:expenseId', async (req, res) => {
         const targetId = Array.isArray(req.params.expenseId)
             ? req.params.expenseId[0]
             : req.params.expenseId;
-        await db_1.prisma.expenses.delete({
-            where: { expenseId: targetId }
-        });
+        const deleted = await db_1.prisma.expenses.updateMany({ where: { expenseId: targetId, deletedAt: null }, data: { deletedAt: new Date() } });
+        if (!deleted.count)
+            return res.status(404).json({ error: 'Expense not found or already archived.' });
         res.json({ message: 'Expense record successfully deleted' });
     }
     catch (error) {

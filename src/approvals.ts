@@ -162,18 +162,18 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       await tx.job_Cost.update({ where: { jobCostId: id }, data: {
         ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed as number } : {}),
         ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap as number } : {}),
-        ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: jobFields.goldCostPerG as number } : {}),
+        ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
         ...(jobFields.stoneCost !== undefined ? { stoneCost: jobFields.stoneCost as number } : {}),
         ...(jobFields.laborCost !== undefined ? { laborCost: jobFields.laborCost as number } : {}),
         ...(jobFields.itemName !== undefined ? { itemName: jobFields.itemName as string | null } : {}),
         ...(jobFields.deadline !== undefined || jobFields.deliveryDate !== undefined ? { deadline: date('deadline') ?? date('deliveryDate') } : {}),
         ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
       } });
-      const movement = await tx.inventory.findUnique({ where: { jobCostId: id } });
+      const movement = await tx.inventory.findFirst({ where: { jobCostId: id, category: 'GOLD' } });
       const goldUsed = Number(jobFields.goldUsed ?? job.goldUsed);
       const goldScrap = Number(jobFields.goldScrap ?? job.goldScrap);
-      if (movement) await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: { itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap, unitPrice: Number(jobFields.goldCostPerG ?? job.goldCostPerG), deletedAt: goldUsed + goldScrap > 0 ? null : new Date() } });
-      else if (goldUsed + goldScrap > 0) await tx.inventory.create({ data: { referenceId: friendlyId(), jobCostId: id, itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), unit: 'grams', category: 'GOLD', quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap, unitPrice: Number(jobFields.goldCostPerG ?? job.goldCostPerG) } });
+      if (movement) await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: { itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap, unitPrice: Number(Number(jobFields.goldCostPerG ?? job.goldCostPerG).toFixed(2)), deletedAt: goldUsed + goldScrap > 0 ? null : new Date() } });
+      else if (goldUsed + goldScrap > 0) await tx.inventory.create({ data: { referenceId: friendlyId(), universalReferenceId: job.universalReferenceId, jobCostId: id, itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), unit: 'grams', category: 'GOLD', quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap, unitPrice: Number(Number(jobFields.goldCostPerG ?? job.goldCostPerG).toFixed(2)) } });
       if (movement || goldUsed + goldScrap > 0) await recalculateInventory(tx);
       if (sellingPrice !== undefined && job.sales) await tx.sales.update({ where: { invoiceId: job.sales.invoiceId }, data: { price: sellingPrice as number } });
       return;
@@ -243,8 +243,8 @@ async function applyDelete(tx: Prisma.TransactionClient, request: any): Promise<
       const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: true } });
       if (!job) throw new Error('Job costing is no longer active.');
       await tx.job_Cost.update({ where: { jobCostId: id }, data: { deletedAt: now, inquiryId: null } });
-      const movement = await tx.inventory.findUnique({ where: { jobCostId: id } });
-      if (movement) { await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: { deletedAt: now } }); await recalculateInventory(tx); }
+      const movements = await tx.inventory.findMany({ where: { jobCostId: id, deletedAt: null } });
+      if (movements.length) { await tx.inventory.updateMany({ where: { jobCostId: id, deletedAt: null }, data: { deletedAt: now } }); await recalculateInventory(tx); }
       if (job.sales) await tx.sales.update({ where: { invoiceId: job.sales.invoiceId }, data: { deletedAt: now } });
       if (job.inquiryId) await tx.inquiries.update({ where: { inquiryId: job.inquiryId }, data: { status: 'PENDING' } });
       return;

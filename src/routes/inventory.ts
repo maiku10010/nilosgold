@@ -35,7 +35,7 @@ router.post('/', async (req: Request, res: Response) => {
     if (typeof parsed === 'string') return res.status(400).json({ error: parsed });
     const saved = await prisma.$transaction(async tx => {
       const created = await tx.inventory.create({ data: {
-        referenceId: friendlyId(), itemName: parsed.itemName, unit: parsed.unit, category: parsed.category,
+        referenceId: friendlyId(), universalReferenceId: friendlyId(), itemName: parsed.itemName, unit: parsed.unit, category: parsed.category,
         quantityIn: parsed.quantityIn, quantityOut: parsed.quantityOut, quantityLoss: parsed.quantityLoss,
         unitPrice: parsed.unitPrice,
         goldIn: parsed.category === 'GOLD' ? parsed.quantityIn : 0,

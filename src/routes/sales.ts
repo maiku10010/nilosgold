@@ -2,6 +2,8 @@ import { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import { isNonNegativeNumber, isPositiveNumber, isValidNonFutureDate, isValidPHContact, meetsMinimumDownPayment, isValidEmail } from '../validation';
 import { receiptEmail, sendSystemEmail } from '../services/email';
+import { friendlyId } from '../friendlyId';
+import { recalculateInventory } from '../inventoryLedger';
 
 const router = Router();
 const serviceTypes = ['Custom', 'Repair', 'Resize', 'Cleaning'];
@@ -42,6 +44,23 @@ router.post('/:invoiceId/finish', async (req: Request, res: Response) => {
       if (current.status !== 'PENDING' || !current.job || current.job.deletedAt || !['APPROVED', 'READY_FOR_PICKUP'].includes(current.job.status)) {
         throw Object.assign(new Error('Only an approved job costing can be moved to Daily Sales.'), { statusCode: 409 });
       }
+
+      const materials = Array.isArray(req.body.materials) ? req.body.materials : [];
+      if (materials.some((item: any) => !item || typeof item.referenceId !== 'string' || !isPositiveNumber(item.quantity))) {
+        throw Object.assign(new Error('Choose valid inventory items and positive quantities.'), { statusCode: 400 });
+      }
+      const deductions = new Map<string, number>();
+      for (const item of materials) deductions.set(item.referenceId, (deductions.get(item.referenceId) ?? 0) + Number(item.quantity));
+      for (const [referenceId, quantity] of deductions) {
+        const stock = await tx.inventory.findFirst({ where: { referenceId, deletedAt: null } });
+        if (!stock || stock.category === 'GOLD' || stock.category === 'TOOLS') throw Object.assign(new Error('Choose an active packaging or material inventory item.'), { statusCode: 400 });
+        await tx.inventory.create({ data: {
+          referenceId: friendlyId(), universalReferenceId: current.job.universalReferenceId,
+          jobCostId: current.job.jobCostId, itemName: stock.itemName, category: stock.category, unit: stock.unit,
+          quantityOut: quantity, unitPrice: stock.unitPrice, updatedAt: new Date(),
+        } });
+      }
+      if (deductions.size) await recalculateInventory(tx);
 
       const finished = await tx.sales.update({
         where: { invoiceId },
@@ -147,6 +166,8 @@ router.delete('/:invoiceId', async (req: Request, res: Response) => {
         const inquiryId = sale.job.inquiryId;
         await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
         await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
+        await tx.inventory.updateMany({ where: { jobCostId: sale.job.jobCostId, deletedAt: null }, data: { deletedAt: new Date() } });
+        await recalculateInventory(tx);
         if (inquiryId) await tx.inquiries.update({ where: { inquiryId }, data: { status: 'PENDING' } });
       } else {
         await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
