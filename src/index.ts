@@ -15,15 +15,13 @@ import auditLogsRouter from './routes/audit_logs';
 import profitAnalysisRouter from './routes/profit_analysis';
 import goldRouter from './routes/gold';
 import approvalsRouter, { queueStaffChanges } from './approvals';
-import { assertAllowedOrigin, authenticate, requireAdmin } from './auth';
+import { assertAllowedOrigin, authenticate, isAllowedOrigin, requireAdmin } from './auth';
 import { auditMutations } from './audit';
 
 const app = express();
 
-const allowedOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:5173,https://nilosgoldui.vercel.app')
-  .split(',').map((origin) => origin.trim()).filter(Boolean);
 app.use(cors({
-  origin(origin, callback) { callback(null, !origin || allowedOrigins.includes(origin)); },
+  origin(origin, callback) { callback(null, !origin || isAllowedOrigin(origin)); },
   credentials: true,
 }));
 app.use(express.json({ limit: '1mb' }));

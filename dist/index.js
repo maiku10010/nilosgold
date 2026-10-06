@@ -55,10 +55,8 @@ const approvals_1 = __importStar(require("./approvals"));
 const auth_2 = require("./auth");
 const audit_1 = require("./audit");
 const app = (0, express_1.default)();
-const allowedOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:5173,https://nilosgoldui.vercel.app')
-    .split(',').map((origin) => origin.trim()).filter(Boolean);
 app.use((0, cors_1.default)({
-    origin(origin, callback) { callback(null, !origin || allowedOrigins.includes(origin)); },
+    origin(origin, callback) { callback(null, !origin || (0, auth_2.isAllowedOrigin)(origin)); },
     credentials: true,
 }));
 app.use(express_1.default.json({ limit: '1mb' }));

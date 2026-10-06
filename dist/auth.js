@@ -11,6 +11,7 @@ exports.setSessionCookie = setSessionCookie;
 exports.clearSessionCookie = clearSessionCookie;
 exports.authenticate = authenticate;
 exports.requireAdmin = requireAdmin;
+exports.isAllowedOrigin = isAllowedOrigin;
 exports.assertAllowedOrigin = assertAllowedOrigin;
 const node_crypto_1 = __importDefault(require("node:crypto"));
 const db_1 = require("./db");
@@ -112,15 +113,16 @@ function requireAdmin(req, res, next) {
     }
     next();
 }
-function assertAllowedOrigin(req, res) {
-    const origin = req.header('origin');
-    if (!origin)
-        return true;
+const vercelUiDeploymentOrigin = /^https:\/\/nilosgoldui-[a-z0-9-]+-myk-paul-edison-fugatas-projects\.vercel\.app$/i;
+function isAllowedOrigin(origin) {
     const allowed = (process.env.CORS_ORIGIN ?? 'http://localhost:5173,https://nilosgoldui.vercel.app')
         .split(',').map(item => item.trim()).filter(Boolean);
-    if (!allowed.includes(origin)) {
-        res.status(403).json({ error: 'Request origin is not allowed.' });
-        return false;
-    }
-    return true;
+    return allowed.includes(origin) || vercelUiDeploymentOrigin.test(origin);
+}
+function assertAllowedOrigin(req, res) {
+    const origin = req.header('origin');
+    if (!origin || isAllowedOrigin(origin))
+        return true;
+    res.status(403).json({ error: 'Request origin is not allowed.' });
+    return false;
 }

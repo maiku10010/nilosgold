@@ -98,11 +98,17 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
   next();
 }
 
-export function assertAllowedOrigin(req: Request, res: Response): boolean {
-  const origin = req.header('origin');
-  if (!origin) return true;
+const vercelUiDeploymentOrigin = /^https:\/\/nilosgoldui-[a-z0-9-]+-myk-paul-edison-fugatas-projects\.vercel\.app$/i;
+
+export function isAllowedOrigin(origin: string): boolean {
   const allowed = (process.env.CORS_ORIGIN ?? 'http://localhost:5173,https://nilosgoldui.vercel.app')
     .split(',').map(item => item.trim()).filter(Boolean);
-  if (!allowed.includes(origin)) { res.status(403).json({ error: 'Request origin is not allowed.' }); return false; }
-  return true;
+  return allowed.includes(origin) || vercelUiDeploymentOrigin.test(origin);
+}
+
+export function assertAllowedOrigin(req: Request, res: Response): boolean {
+  const origin = req.header('origin');
+  if (!origin || isAllowedOrigin(origin)) return true;
+  res.status(403).json({ error: 'Request origin is not allowed.' });
+  return false;
 }
