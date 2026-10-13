@@ -7,6 +7,7 @@ const auth_1 = require("./auth");
 const audit_1 = require("./audit");
 const inventoryLedger_1 = require("./inventoryLedger");
 const friendlyId_1 = require("./friendlyId");
+const validation_1 = require("./validation");
 const contextFields = new Set(['invoiceId', 'jobCostId', 'referenceId', 'inquiryId', 'expenseId', 'clientId', 'clientName']);
 function requestSpec(req) {
     const segments = req.path.split('/').filter(Boolean).map(decodeURIComponent);
@@ -89,6 +90,8 @@ function normalizedChanges(body, spec) {
                 throw new Error(`${key} is too long.`);
             if (key === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
                 throw new Error('Enter a valid email address.');
+            if (['contactNum', 'contactInfo'].includes(key) && value && !(0, validation_1.isValidPHContact)(raw))
+                throw new Error('Enter an 11-digit Philippine mobile number starting with 09.');
             changes[key] = value || (nullableStringFields.has(key) ? null : value);
         }
         else {

@@ -17,7 +17,7 @@ router.post('/', async (req, res) => {
         if (email && (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())))
             return res.status(400).json({ error: 'Enter a valid customer email address.' });
         if (contactInfo && !(0, validation_1.isValidPHContact)(contactInfo))
-            return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+            return res.status(400).json({ error: 'Enter a valid Philippine contact number (11 digits starting with 09).' });
         if (isFullyPaid !== undefined && typeof isFullyPaid !== 'boolean')
             return res.status(400).json({ error: 'Fully Paid must be true or false.' });
         const inquiry = await db_1.prisma.inquiries.create({
@@ -70,7 +70,7 @@ router.put('/:inquiryId', async (req, res) => {
         if (req.body.email && !(0, validation_1.isValidEmail)(req.body.email))
             return res.status(400).json({ error: 'Enter a valid customer email address.' });
         if (req.body.contactInfo && !(0, validation_1.isValidPHContact)(req.body.contactInfo))
-            return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+            return res.status(400).json({ error: 'Enter a valid Philippine contact number (11 digits starting with 09).' });
         if (req.body.isFullyPaid !== undefined && typeof req.body.isFullyPaid !== 'boolean')
             return res.status(400).json({ error: 'Fully Paid must be true or false.' });
         const existing = await db_1.prisma.inquiries.findFirst({ where: { inquiryId, deletedAt: null }, include: { jobCost: true } });

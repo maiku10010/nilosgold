@@ -5,6 +5,7 @@ import { isAdminRole } from './auth';
 import { writeSystemLog } from './audit';
 import { recalculateInventory, syncInventoryExpense } from './inventoryLedger';
 import { friendlyId } from './friendlyId';
+import { isValidPHContact } from './validation';
 
 type Entity = 'SALE' | 'JOB_COST' | 'INQUIRY' | 'EXPENSE' | 'INVENTORY' | 'CLIENT';
 type Action = 'UPDATE' | 'DELETE';
@@ -79,6 +80,7 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec): Record<st
       if (!value && !nullableStringFields.has(key)) throw new Error(`${key} cannot be empty.`);
       if (value.length > 500) throw new Error(`${key} is too long.`);
       if (key === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw new Error('Enter a valid email address.');
+      if (['contactNum', 'contactInfo'].includes(key) && value && !isValidPHContact(raw)) throw new Error('Enter an 11-digit Philippine mobile number starting with 09.');
       changes[key] = value || (nullableStringFields.has(key) ? null : value);
     } else {
       throw new Error(`Invalid value for ${key}.`);

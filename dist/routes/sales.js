@@ -133,7 +133,7 @@ router.put('/:invoiceId', async (req, res) => {
             return res.status(400).json({ error: 'Payment must be zero or greater and no greater than the total price.' });
         }
         if (req.body.contactNum !== undefined && !(0, validation_1.isValidPHContact)(req.body.contactNum))
-            return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+            return res.status(400).json({ error: 'Enter a valid Philippine contact number (11 digits starting with 09).' });
         if (req.body.email !== undefined && req.body.email !== null && req.body.email !== '' && !(0, validation_1.isValidEmail)(req.body.email))
             return res.status(400).json({ error: 'Enter a valid email address.' });
         if (date !== undefined && !(0, validation_1.isValidNonFutureDate)(date))

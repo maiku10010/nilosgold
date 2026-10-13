@@ -9,7 +9,7 @@ const router = (0, express_1.Router)();
 router.post('/', async (req, res) => {
     try {
         if (!(0, validation_1.isValidPHContact)(req.body.contactNum))
-            return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+            return res.status(400).json({ error: 'Enter a valid Philippine contact number (11 digits starting with 09).' });
         if (req.body.email && !(0, validation_1.isValidEmail)(req.body.email))
             return res.status(400).json({ error: 'Enter a valid email address.' });
         const newClient = await db_1.prisma.client.create({
@@ -49,7 +49,7 @@ router.put('/:clientId', async (req, res) => {
             ? req.params.clientId[0]
             : req.params.clientId;
         if (!(0, validation_1.isValidPHContact)(req.body.contactNum))
-            return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+            return res.status(400).json({ error: 'Enter a valid Philippine contact number (11 digits starting with 09).' });
         if (req.body.email && !(0, validation_1.isValidEmail)(req.body.email))
             return res.status(400).json({ error: 'Enter a valid email address.' });
         const updatedClient = await db_1.prisma.client.update({

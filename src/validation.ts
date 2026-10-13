@@ -23,10 +23,10 @@ export function isPositiveNumber(value: unknown): boolean {
   return Number.isFinite(parsed) && parsed > 0;
 }
 
-export const PH_CONTACT_PATTERN = /^(09\d{9}|\+639\d{9})$/;
+export const PH_CONTACT_PATTERN = /^09\d{9}$/;
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export function isValidPHContact(value: unknown): boolean {
-  return typeof value === 'string' && PH_CONTACT_PATTERN.test(value.trim().replace(/[ -]/g, ''));
+  return typeof value === 'string' && PH_CONTACT_PATTERN.test(value);
 }
 export function isValidEmail(value: unknown): boolean {
   return typeof value === 'string' && EMAIL_PATTERN.test(value.trim());

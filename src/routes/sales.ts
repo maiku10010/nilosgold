@@ -134,7 +134,7 @@ router.put('/:invoiceId', async (req: Request, res: Response) => {
     if (!isPositiveNumber(price) || !isNonNegativeNumber(payment) || payment > price) {
       return res.status(400).json({ error: 'Payment must be zero or greater and no greater than the total price.' });
     }
-    if (req.body.contactNum !== undefined && !isValidPHContact(req.body.contactNum)) return res.status(400).json({ error: 'Enter a valid Philippine contact number (09XXXXXXXXX or +639XXXXXXXXX).' });
+    if (req.body.contactNum !== undefined && !isValidPHContact(req.body.contactNum)) return res.status(400).json({ error: 'Enter a valid Philippine contact number (11 digits starting with 09).' });
     if (req.body.email !== undefined && req.body.email !== null && req.body.email !== '' && !isValidEmail(req.body.email)) return res.status(400).json({ error: 'Enter a valid email address.' });
     if (date !== undefined && !isValidNonFutureDate(date)) return res.status(400).json({ error: 'Sale date must be a valid date no later than today.' });
     if (!serviceTypes.includes(req.body.serviceType)) return res.status(400).json({ error: 'Choose a valid service type.' });

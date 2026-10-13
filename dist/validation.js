@@ -29,10 +29,10 @@ function isPositiveNumber(value) {
     const parsed = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
     return Number.isFinite(parsed) && parsed > 0;
 }
-exports.PH_CONTACT_PATTERN = /^(09\d{9}|\+639\d{9})$/;
+exports.PH_CONTACT_PATTERN = /^09\d{9}$/;
 exports.EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function isValidPHContact(value) {
-    return typeof value === 'string' && exports.PH_CONTACT_PATTERN.test(value.trim().replace(/[ -]/g, ''));
+    return typeof value === 'string' && exports.PH_CONTACT_PATTERN.test(value);
 }
 function isValidEmail(value) {
     return typeof value === 'string' && exports.EMAIL_PATTERN.test(value.trim());
