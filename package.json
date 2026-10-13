@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "nodemon",
     "build": "tsc",
+    "test:receipt": "npm run build && node --test tests/receipt.test.cjs",
     "start": "node dist/index.js",
     "vercel-build": "prisma generate && npm run build"
   },

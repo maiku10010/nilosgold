@@ -14,7 +14,7 @@ function requestSpec(req) {
         return null;
     const [resource, id] = segments;
     const resourceSpecs = {
-        sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'payment', 'salesDate', 'date', 'clientName', 'contactNum'] },
+        sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'payment', 'salesDate', 'date', 'clientName', 'contactNum', 'email'] },
         'job-cost': { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
         job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
         inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'isFullyPaid', 'date', 'inqDate'] },
@@ -195,8 +195,8 @@ async function applyUpdate(tx, request, changes) {
                     ...(changes.salesDate || changes.date ? { salesDate: date('salesDate') ?? date('date') } : {}),
                 } });
             const clientData = request.proposedData;
-            const clientChanges = clientData && ('clientName' in clientData || 'contactNum' in clientData)
-                ? { ...(typeof clientData.clientName === 'string' ? { clientName: clientData.clientName } : {}), ...(clientData.contactNum !== undefined ? { contactNum: clientData.contactNum } : {}) }
+            const clientChanges = clientData && ('clientName' in clientData || 'contactNum' in clientData || 'email' in clientData)
+                ? { ...(typeof clientData.clientName === 'string' ? { clientName: clientData.clientName } : {}), ...(clientData.contactNum !== undefined ? { contactNum: clientData.contactNum } : {}), ...(clientData.email !== undefined ? { email: clientData.email } : {}) }
                 : null;
             if (clientChanges)
                 await tx.client.update({ where: { clientId: sale.clientId }, data: clientChanges });

@@ -1,3 +1,5 @@
+import { isValidEmail } from '../validation';
+
 type EmailResult = { sent: boolean; reason?: string; messageId?: string };
 
 function html(value: unknown): string {
@@ -8,21 +10,29 @@ export async function sendSystemEmail(to: string | null | undefined, subject: st
   const key = process.env.RESEND_API_KEY;
   const from = process.env.EMAIL_FROM;
   if (!to || !to.trim()) return { sent: false, reason: 'Customer email is missing.' };
+  if (!isValidEmail(to)) return { sent: false, reason: 'Correct the customer email address before sending.' };
   if (!key || !from) return { sent: false, reason: 'Email service needs RESEND_API_KEY and EMAIL_FROM.' };
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
-      'Idempotency-Key': idempotencyKey,
-    },
-    body: JSON.stringify({ from, to: [to.trim()], subject, html: content }),
-    signal: AbortSignal.timeout(12_000),
-  });
-  const result = await response.json().catch(() => ({})) as { id?: string; message?: string; error?: string };
-  if (!response.ok) return { sent: false, reason: result.message ?? result.error ?? `Email provider returned ${response.status}.` };
-  return { sent: true, messageId: result.id };
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({ from, to: [to.trim()], subject, html: content }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    const result = await response.json().catch(() => ({})) as { id?: string; message?: string; error?: string } | null;
+    if (!response.ok) return { sent: false, reason: result?.message ?? result?.error ?? `Email provider returned ${response.status}.` };
+    if (typeof result?.id !== 'string' || !result.id.trim()) {
+      return { sent: false, reason: 'The provider did not confirm whether the email was accepted. Ask an administrator to check the provider before sending again.' };
+    }
+    return { sent: true, messageId: result.id };
+  } catch {
+    return { sent: false, reason: 'The email request timed out or lost its connection. Sending may have succeeded. Ask an administrator to check the provider before sending again.' };
+  }
 }
 
 export function receiptEmail(sale: {

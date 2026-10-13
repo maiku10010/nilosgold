@@ -93,19 +93,30 @@ router.post('/:invoiceId/finish', async (req, res) => {
 router.post('/:invoiceId/receipt', async (req, res) => {
     try {
         const invoiceId = Array.isArray(req.params.invoiceId) ? req.params.invoiceId[0] : req.params.invoiceId;
-        if (req.body.confirm !== true || req.body.invoiceId !== invoiceId) {
+        if (req.body?.confirm !== true || req.body?.invoiceId !== invoiceId) {
             return res.status(400).json({ error: 'Confirm the exact invoice in Daily Sales before sending its receipt.' });
         }
         const sale = await db_1.prisma.sales.findFirst({ where: { invoiceId, deletedAt: null }, include: saleIncludes });
         if (!sale || sale.status !== 'FINISHED')
             return res.status(404).json({ error: 'Finished sale not found.' });
         if (sale.receiptSentAt)
-            return res.status(409).json({ error: 'The receipt has already been sent.' });
+            return res.json({ ...sale, notification: { sent: true, alreadySent: true } });
+        if (req.body.email !== undefined && req.body.email !== sale.client.email?.trim()) {
+            return res.status(409).json({ error: 'The customer email changed. Refresh Daily Sales and confirm the current address before sending.' });
+        }
         const notification = await (0, email_1.sendSystemEmail)(sale.client.email, `Official Receipt · ${sale.invoiceId}`, (0, email_1.receiptEmail)(sale), `official-receipt-${sale.invoiceId}`);
-        const updated = notification.sent
-            ? await db_1.prisma.sales.update({ where: { invoiceId }, data: { receiptSentAt: new Date() }, include: saleIncludes })
-            : sale;
-        res.json({ ...updated, notification });
+        if (!notification.sent)
+            return res.json({ ...sale, notification });
+        // Concurrent provider replays must not replace the first recorded timestamp.
+        try {
+            await db_1.prisma.sales.updateMany({ where: { invoiceId, receiptSentAt: null }, data: { receiptSentAt: new Date() } });
+            const updated = await db_1.prisma.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes });
+            return res.json({ ...updated, notification });
+        }
+        catch (error) {
+            console.error('Receipt accepted but timestamp could not be saved:', error);
+            return res.status(503).json({ error: 'The email provider accepted this receipt, but its saved sent status could not be confirmed. Ask an administrator to check the provider before sending again.' });
+        }
     }
     catch (error) {
         console.error('Error sending receipt:', error);
@@ -150,6 +161,7 @@ router.put('/:invoiceId', async (req, res) => {
                     ...(date ? { salesDate: new Date(`${date}T00:00:00`) } : {}),
                     client: { update: {
                             ...(typeof req.body.contactNum === 'string' ? { contactNum: req.body.contactNum.trim() } : {}),
+                            ...(req.body.email !== undefined ? { email: typeof req.body.email === 'string' ? req.body.email.trim() || null : null } : {}),
                         } },
                 },
             });
