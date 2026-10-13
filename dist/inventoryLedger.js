@@ -1,21 +1,43 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.calculateInventoryBalances = calculateInventoryBalances;
 exports.recalculateInventory = recalculateInventory;
 exports.syncInventoryExpense = syncInventoryExpense;
 const friendlyId_1 = require("./friendlyId");
+const movementKey = (row) => row.category === 'GOLD'
+    ? 'GOLD:grams'
+    : `${row.category}:${row.unit}:${row.itemName.trim().toLowerCase()}`;
+const movementFactor = (row) => row.category === 'GOLD' && row.unit === 'troy oz' ? 31.1034768 : 1;
+function calculateInventoryBalances(rows) {
+    const totals = new Map();
+    for (const row of rows) {
+        const key = movementKey(row);
+        const change = (Number(row.quantityIn) - Number(row.quantityOut) - Number(row.quantityLoss)) * movementFactor(row);
+        totals.set(key, (totals.get(key) ?? 0) + change);
+    }
+    for (const [key, total] of totals) {
+        if (total < -0.000001) {
+            const row = rows.find(candidate => movementKey(candidate) === key);
+            throw Object.assign(new Error(`Insufficient ${row.category.toLowerCase()} stock for ${row.itemName} (${row.unit}).`), { statusCode: 409 });
+        }
+    }
+    const running = new Map();
+    const result = new Map();
+    for (const row of rows) {
+        const key = movementKey(row);
+        const factor = movementFactor(row);
+        const balance = (running.get(key) ?? 0) + (Number(row.quantityIn) - Number(row.quantityOut) - Number(row.quantityLoss)) * factor;
+        running.set(key, balance);
+        result.set(row.referenceId, balance / factor);
+    }
+    return result;
+}
 async function recalculateInventory(tx) {
     const rows = await tx.inventory.findMany({ where: { deletedAt: null }, orderBy: [{ updatedAt: 'asc' }, { referenceId: 'asc' }] });
-    const balances = new Map();
+    const balances = calculateInventoryBalances(rows);
     for (const row of rows) {
         const gold = row.category === 'GOLD';
-        const key = gold ? 'GOLD:grams' : `${row.category}:${row.unit}:${row.itemName.trim().toLowerCase()}`;
-        const factor = gold && row.unit === 'troy oz' ? 31.1034768 : 1;
-        const balance = (balances.get(key) ?? 0) + (Number(row.quantityIn) - Number(row.quantityOut) - Number(row.quantityLoss)) * factor;
-        if (balance < -0.000001)
-            throw Object.assign(new Error(`Insufficient ${row.category.toLowerCase()} stock for ${row.itemName} (${row.unit}).`), { statusCode: 409 });
-        const next = Math.max(0, balance);
-        balances.set(key, next);
-        const displayBalance = next / factor;
+        const displayBalance = balances.get(row.referenceId) ?? 0;
         await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { balance: displayBalance, totalGold: gold ? displayBalance : 0 } });
     }
 }

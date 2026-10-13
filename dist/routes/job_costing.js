@@ -20,8 +20,8 @@ router.post('/', async (req, res) => {
         const requestedDeadline = deadline ?? deliveryDate;
         if (itemName !== undefined && itemName !== null && (typeof itemName !== 'string' || itemName.trim().length > 120))
             return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
-        if (requestedDeadline !== undefined && requestedDeadline !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(String(requestedDeadline)) || Number.isNaN(new Date(`${requestedDeadline}T00:00:00Z`).getTime())))
-            return res.status(400).json({ error: 'Enter a valid delivery date.' });
+        if (requestedDeadline !== undefined && requestedDeadline !== null && !(0, validation_1.isTodayOrFutureDate)(requestedDeadline))
+            return res.status(400).json({ error: 'Delivery date must be today or later.' });
         const goldUsed = Number(req.body.goldUsed);
         const goldScrap = Number(req.body.goldScrap ?? 0);
         const goldCostPerG = Number(Number(req.body.goldCostPerG).toFixed(2));
@@ -201,8 +201,8 @@ router.put('/:jobCostId', async (req, res) => {
         const requestedDeadline = req.body.deadline ?? req.body.deliveryDate;
         if (req.body.itemName !== undefined && req.body.itemName !== null && (typeof req.body.itemName !== 'string' || req.body.itemName.trim().length > 120))
             return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
-        if (requestedDeadline !== undefined && requestedDeadline !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(String(requestedDeadline)) || Number.isNaN(new Date(`${requestedDeadline}T00:00:00Z`).getTime())))
-            return res.status(400).json({ error: 'Enter a valid delivery date.' });
+        if (requestedDeadline !== undefined && requestedDeadline !== null && requestedDeadline !== '' && !(0, validation_1.isTodayOrFutureDate)(requestedDeadline))
+            return res.status(400).json({ error: 'Delivery date must be today or later.' });
         if (![goldUsed, goldScrap, stoneCost, laborCost].every(validation_1.isNonNegativeNumber) || !(0, validation_1.isPositiveNumber)(goldCostPerG) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
             return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
         }

@@ -5,7 +5,7 @@ import { isAdminRole } from './auth';
 import { writeSystemLog } from './audit';
 import { recalculateInventory, syncInventoryExpense } from './inventoryLedger';
 import { friendlyId } from './friendlyId';
-import { isValidPHContact } from './validation';
+import { isTodayOrFutureDate, isValidPHContact } from './validation';
 
 type Entity = 'SALE' | 'JOB_COST' | 'INQUIRY' | 'EXPENSE' | 'INVENTORY' | 'CLIENT';
 type Action = 'UPDATE' | 'DELETE';
@@ -62,7 +62,10 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec): Record<st
       changes[key] = value;
     } else if (key === 'isFullyPaid' && typeof raw === 'boolean') {
       changes[key] = raw;
-    } else if (['date', 'salesDate', 'inqDate', 'expDate', 'updatedAt', 'deadline', 'deliveryDate'].includes(key)) {
+    } else if (['deadline', 'deliveryDate'].includes(key)) {
+      if (!isTodayOrFutureDate(raw)) throw new Error('Delivery date must be today or later.');
+      changes[key] = new Date(`${raw}T00:00:00.000Z`).toISOString();
+    } else if (['date', 'salesDate', 'inqDate', 'expDate', 'updatedAt'].includes(key)) {
       if (typeof raw !== 'string' || !raw || Number.isNaN(Date.parse(raw))) throw new Error('Enter a valid date.');
       const date = new Date(raw.length === 10 ? `${raw}T00:00:00` : raw);
       if (date.getTime() > Date.now()) throw new Error('Dates cannot be in the future.');

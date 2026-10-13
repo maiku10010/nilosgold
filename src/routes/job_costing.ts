@@ -2,7 +2,7 @@ import { Request, Response, Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { friendlyId } from '../friendlyId';
-import { isNonNegativeNumber, isPositiveNumber } from '../validation';
+import { isNonNegativeNumber, isPositiveNumber, isTodayOrFutureDate } from '../validation';
 import { readyEmail, sendSystemEmail } from '../services/email';
 import { recalculateInventory } from '../inventoryLedger';
 
@@ -19,7 +19,7 @@ router.post('/', async (req: Request, res: Response) => {
     const { inquiryId, clientName, contactNum, empId, serviceType, itemName, deadline, deliveryDate } = req.body;
     const requestedDeadline = deadline ?? deliveryDate;
     if (itemName !== undefined && itemName !== null && (typeof itemName !== 'string' || itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
-    if (requestedDeadline !== undefined && requestedDeadline !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(String(requestedDeadline)) || Number.isNaN(new Date(`${requestedDeadline}T00:00:00Z`).getTime()))) return res.status(400).json({ error: 'Enter a valid delivery date.' });
+    if (requestedDeadline !== undefined && requestedDeadline !== null && !isTodayOrFutureDate(requestedDeadline)) return res.status(400).json({ error: 'Delivery date must be today or later.' });
     const goldUsed = Number(req.body.goldUsed);
     const goldScrap = Number(req.body.goldScrap ?? 0);
     const goldCostPerG = Number(Number(req.body.goldCostPerG).toFixed(2));
@@ -188,7 +188,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
     const sellingPrice = Number(req.body.sellingPrice);
     const requestedDeadline = req.body.deadline ?? req.body.deliveryDate;
     if (req.body.itemName !== undefined && req.body.itemName !== null && (typeof req.body.itemName !== 'string' || req.body.itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
-    if (requestedDeadline !== undefined && requestedDeadline !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(String(requestedDeadline)) || Number.isNaN(new Date(`${requestedDeadline}T00:00:00Z`).getTime()))) return res.status(400).json({ error: 'Enter a valid delivery date.' });
+    if (requestedDeadline !== undefined && requestedDeadline !== null && requestedDeadline !== '' && !isTodayOrFutureDate(requestedDeadline)) return res.status(400).json({ error: 'Delivery date must be today or later.' });
     if (![goldUsed, goldScrap, stoneCost, laborCost].every(isNonNegativeNumber) || !isPositiveNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
       return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
     }
