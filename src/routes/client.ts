@@ -2,6 +2,7 @@ import express, { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import { friendlyId } from '../friendlyId';
 import { isValidEmail, isValidPHContact } from '../validation';
+import { clientBalance, withSaleTotals } from '../accounting';
 
 const router = Router();
 
@@ -16,10 +17,9 @@ router.post('/', async (req: Request, res: Response) => {
         clientName: req.body.clientName,
         contactNum: req.body.contactNum,
         email: req.body.email || null,
-        balance: req.body.balance
       }
     });
-    res.json(newClient);
+    res.json({ ...newClient, balance: 0 });
   } catch (error) {
     console.error('Error creating client:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -31,9 +31,9 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const allClients = await prisma.client.findMany({
       where: { deletedAt: null },
-      include: { sales: { where: { deletedAt: null } }, inquiries: { where: { deletedAt: null } } }
+      include: { sales: { where: { deletedAt: null }, include: { payments: true } }, inquiries: { where: { deletedAt: null } } }
     });
-    res.json(allClients);
+    res.json(allClients.map(client => ({ ...client, sales: client.sales.map(withSaleTotals), balance: clientBalance(client.sales) })));
   } catch (error) {
     console.error('Error fetching clients:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -54,10 +54,10 @@ router.put('/:clientId', async (req: Request, res: Response) => {
         clientName: req.body.clientName,
         contactNum: req.body.contactNum,
         email: req.body.email ?? undefined,
-        balance: req.body.balance
       }
     });
-    res.json(updatedClient);
+    const sales = await prisma.sales.findMany({ where: { clientId: targetId, deletedAt: null }, include: { payments: true } });
+    res.json({ ...updatedClient, balance: clientBalance(sales) });
   } catch (error) {
     console.error('Error updating client:', error);
     res.status(500).json({ error: 'Internal Server Error' });

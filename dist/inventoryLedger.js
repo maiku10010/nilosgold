@@ -1,9 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.calculateInventoryBalances = calculateInventoryBalances;
-exports.recalculateInventory = recalculateInventory;
-exports.syncInventoryExpense = syncInventoryExpense;
-const friendlyId_1 = require("./friendlyId");
+exports.validateInventoryLedger = validateInventoryLedger;
 const movementKey = (row) => row.category === 'GOLD'
     ? 'GOLD:grams'
     : `${row.category}:${row.unit}:${row.itemName.trim().toLowerCase()}`;
@@ -32,32 +30,7 @@ function calculateInventoryBalances(rows) {
     }
     return result;
 }
-async function recalculateInventory(tx) {
+async function validateInventoryLedger(tx) {
     const rows = await tx.inventory.findMany({ where: { deletedAt: null }, orderBy: [{ updatedAt: 'asc' }, { referenceId: 'asc' }] });
-    const balances = calculateInventoryBalances(rows);
-    for (const row of rows) {
-        const gold = row.category === 'GOLD';
-        const displayBalance = balances.get(row.referenceId) ?? 0;
-        await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { balance: displayBalance, totalGold: gold ? displayBalance : 0 } });
-    }
-}
-async function syncInventoryExpense(tx, movement) {
-    const existing = await tx.expenses.findUnique({ where: { inventoryReferenceId: movement.referenceId } });
-    const amount = Number(movement.quantityIn) * Number(movement.unitPrice);
-    if (movement.deletedAt || amount <= 0) {
-        if (existing && !existing.deletedAt)
-            await tx.expenses.update({ where: { expenseId: existing.expenseId }, data: { deletedAt: new Date() } });
-        return;
-    }
-    const data = {
-        category: `Inventory · ${movement.category}`,
-        amount,
-        description: `Purchase: ${movement.itemName} (${movement.quantityIn} ${movement.unit}) at ${Number(movement.unitPrice).toFixed(2)} per ${movement.unit}`,
-        expDate: movement.updatedAt,
-        deletedAt: null,
-    };
-    if (existing)
-        await tx.expenses.update({ where: { expenseId: existing.expenseId }, data });
-    else
-        await tx.expenses.create({ data: { expenseId: (0, friendlyId_1.friendlyId)(), ...data, inventoryReferenceId: movement.referenceId } });
+    calculateInventoryBalances(rows);
 }

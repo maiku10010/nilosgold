@@ -4,6 +4,7 @@ const express_1 = require("express");
 const db_1 = require("../db");
 const friendlyId_1 = require("../friendlyId");
 const validation_1 = require("../validation");
+const accounting_1 = require("../accounting");
 const router = (0, express_1.Router)();
 //create operation for client
 router.post('/', async (req, res) => {
@@ -18,10 +19,9 @@ router.post('/', async (req, res) => {
                 clientName: req.body.clientName,
                 contactNum: req.body.contactNum,
                 email: req.body.email || null,
-                balance: req.body.balance
             }
         });
-        res.json(newClient);
+        res.json({ ...newClient, balance: 0 });
     }
     catch (error) {
         console.error('Error creating client:', error);
@@ -33,9 +33,9 @@ router.get('/', async (req, res) => {
     try {
         const allClients = await db_1.prisma.client.findMany({
             where: { deletedAt: null },
-            include: { sales: { where: { deletedAt: null } }, inquiries: { where: { deletedAt: null } } }
+            include: { sales: { where: { deletedAt: null }, include: { payments: true } }, inquiries: { where: { deletedAt: null } } }
         });
-        res.json(allClients);
+        res.json(allClients.map(client => ({ ...client, sales: client.sales.map(accounting_1.withSaleTotals), balance: (0, accounting_1.clientBalance)(client.sales) })));
     }
     catch (error) {
         console.error('Error fetching clients:', error);
@@ -58,10 +58,10 @@ router.put('/:clientId', async (req, res) => {
                 clientName: req.body.clientName,
                 contactNum: req.body.contactNum,
                 email: req.body.email ?? undefined,
-                balance: req.body.balance
             }
         });
-        res.json(updatedClient);
+        const sales = await db_1.prisma.sales.findMany({ where: { clientId: targetId, deletedAt: null }, include: { payments: true } });
+        res.json({ ...updatedClient, balance: (0, accounting_1.clientBalance)(sales) });
     }
     catch (error) {
         console.error('Error updating client:', error);

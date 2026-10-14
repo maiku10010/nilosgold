@@ -8,6 +8,7 @@ const audit_1 = require("./audit");
 const inventoryLedger_1 = require("./inventoryLedger");
 const friendlyId_1 = require("./friendlyId");
 const validation_1 = require("./validation");
+const accounting_1 = require("./accounting");
 const contextFields = new Set(['invoiceId', 'jobCostId', 'referenceId', 'inquiryId', 'expenseId', 'clientId', 'clientName']);
 function requestSpec(req) {
     const segments = req.path.split('/').filter(Boolean).map(decodeURIComponent);
@@ -16,11 +17,11 @@ function requestSpec(req) {
     const [resource, id] = segments;
     const resourceSpecs = {
         sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'payment', 'salesDate', 'date', 'clientName', 'contactNum', 'email'] },
-        'job-cost': { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
-        job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
+        'job-cost': { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
+        job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
         inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'isFullyPaid', 'date', 'inqDate'] },
         expenses: { entity: 'EXPENSE', allowed: ['category', 'amount', 'description', 'expDate', 'date'] },
-        inventory: { entity: 'INVENTORY', allowed: ['itemName', 'category', 'quantityIn', 'quantityOut', 'quantityLoss', 'goldIn', 'goldOut', 'scraps', 'scrap', 'totalGold', 'balance', 'unit', 'unitPrice', 'date', 'updatedAt'] },
+        inventory: { entity: 'INVENTORY', allowed: ['itemName', 'category', 'quantityIn', 'quantityOut', 'quantityLoss', 'goldIn', 'goldOut', 'scraps', 'scrap', 'unit', 'unitPrice', 'date', 'updatedAt'] },
         // Client balance is derived from invoices and must never be manually edited.
         client: { entity: 'CLIENT', allowed: ['clientName', 'contactNum', 'email'] },
     };
@@ -32,7 +33,7 @@ function json(value) {
 }
 async function findCurrent(entity, id) {
     switch (entity) {
-        case 'SALE': return db_1.prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true } });
+        case 'SALE': return db_1.prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true, payments: true } });
         case 'JOB_COST': return db_1.prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } } } });
         case 'INQUIRY': return db_1.prisma.inquiries.findFirst({ where: { inquiryId: id, deletedAt: null }, include: { jobCost: true } });
         case 'EXPENSE': return db_1.prisma.expenses.findFirst({ where: { expenseId: id, deletedAt: null } });
@@ -40,7 +41,7 @@ async function findCurrent(entity, id) {
         case 'CLIENT': return db_1.prisma.client.findFirst({ where: { clientId: id, deletedAt: null } });
     }
 }
-const numericFields = new Set(['price', 'payment', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'totalGold', 'quantityIn', 'quantityOut', 'quantityLoss', 'unitPrice']);
+const numericFields = new Set(['price', 'payment', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'quantityIn', 'quantityOut', 'quantityLoss', 'unitPrice']);
 const positiveFields = new Set(['price', 'goldCostPerG', 'sellingPrice', 'amount']);
 const nullableStringFields = new Set(['contactInfo', 'email', 'details', 'description', 'contactNum']);
 function normalizedChanges(body, spec) {
@@ -79,13 +80,7 @@ function normalizedChanges(body, spec) {
             const value = Number(raw);
             if (!Number.isFinite(value) || value < 0)
                 throw new Error('Enter a valid scrap weight.');
-            changes.scraps = value;
-        }
-        else if (key === 'balance') {
-            const value = Number(raw);
-            if (!Number.isFinite(value) || value < 0)
-                throw new Error('Enter a valid balance.');
-            changes.totalGold = value;
+            changes.quantityLoss = value;
         }
         else if (typeof raw === 'string') {
             const value = raw.trim();
@@ -151,7 +146,7 @@ async function queueStaffChanges(req, res, next) {
             }
             if (spec.entity === 'SALE') {
                 const nextPrice = Number(proposedData.price ?? current.price);
-                const nextPayment = Number(proposedData.payment ?? current.payment);
+                const nextPayment = Number(proposedData.payment ?? (0, accounting_1.paidTotal)(current.payments));
                 if (nextPayment > nextPrice) {
                     res.status(400).json({ error: 'Payment cannot exceed the sale price.' });
                     return;
@@ -199,17 +194,16 @@ async function applyUpdate(tx, request, changes) {
             await tx.sales.update({ where: { invoiceId: id }, data: {
                     ...(changes.serviceType !== undefined ? { serviceType: changes.serviceType } : {}),
                     ...(changes.price !== undefined ? { price: changes.price } : {}),
-                    ...(changes.payment !== undefined ? { payment: changes.payment } : {}),
                     ...(changes.salesDate || changes.date ? { salesDate: date('salesDate') ?? date('date') } : {}),
                 } });
+            if (changes.payment !== undefined)
+                await (0, accounting_1.setSalePaidTotal)(tx, id, changes.payment);
             const clientData = request.proposedData;
             const clientChanges = clientData && ('clientName' in clientData || 'contactNum' in clientData || 'email' in clientData)
                 ? { ...(typeof clientData.clientName === 'string' ? { clientName: clientData.clientName } : {}), ...(clientData.contactNum !== undefined ? { contactNum: clientData.contactNum } : {}), ...(clientData.email !== undefined ? { email: clientData.email } : {}) }
                 : null;
             if (clientChanges)
                 await tx.client.update({ where: { clientId: sale.clientId }, data: clientChanges });
-            const relatedSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, payment: true } });
-            await tx.client.update({ where: { clientId: sale.clientId }, data: { balance: relatedSales.reduce((sum, row) => sum + Math.max(0, Number(row.price) - Number(row.payment)), 0) } });
             return;
         }
         case 'JOB_COST': {
@@ -223,6 +217,8 @@ async function applyUpdate(tx, request, changes) {
                     ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
                     ...(jobFields.stoneCost !== undefined ? { stoneCost: jobFields.stoneCost } : {}),
                     ...(jobFields.laborCost !== undefined ? { laborCost: jobFields.laborCost } : {}),
+                    ...(jobFields.laborCharge !== undefined ? { laborCharge: jobFields.laborCharge } : {}),
+                    ...(jobFields.otherCost !== undefined ? { otherCost: jobFields.otherCost } : {}),
                     ...(jobFields.itemName !== undefined ? { itemName: jobFields.itemName } : {}),
                     ...(jobFields.deadline !== undefined || jobFields.deliveryDate !== undefined ? { deadline: date('deadline') ?? date('deliveryDate') } : {}),
                     ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
@@ -231,11 +227,11 @@ async function applyUpdate(tx, request, changes) {
             const goldUsed = Number(jobFields.goldUsed ?? job.goldUsed);
             const goldScrap = Number(jobFields.goldScrap ?? job.goldScrap);
             if (movement)
-                await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: { itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap, unitPrice: Number(Number(jobFields.goldCostPerG ?? job.goldCostPerG).toFixed(2)), deletedAt: goldUsed + goldScrap > 0 ? null : new Date() } });
+                await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: { itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), quantityOut: goldUsed, quantityLoss: goldScrap, unitPrice: Number(Number(jobFields.goldCostPerG ?? job.goldCostPerG).toFixed(2)), deletedAt: goldUsed + goldScrap > 0 ? null : new Date() } });
             else if (goldUsed + goldScrap > 0)
-                await tx.inventory.create({ data: { referenceId: (0, friendlyId_1.friendlyId)(), universalReferenceId: job.universalReferenceId, jobCostId: id, itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), unit: 'grams', category: 'GOLD', quantityOut: goldUsed, quantityLoss: goldScrap, goldOut: goldUsed, scraps: goldScrap, unitPrice: Number(Number(jobFields.goldCostPerG ?? job.goldCostPerG).toFixed(2)) } });
+                await tx.inventory.create({ data: { referenceId: (0, friendlyId_1.friendlyId)(), universalReferenceId: job.universalReferenceId, jobCostId: id, itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), unit: 'grams', category: 'GOLD', quantityOut: goldUsed, quantityLoss: goldScrap, unitPrice: Number(Number(jobFields.goldCostPerG ?? job.goldCostPerG).toFixed(2)) } });
             if (movement || goldUsed + goldScrap > 0)
-                await (0, inventoryLedger_1.recalculateInventory)(tx);
+                await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             if (sellingPrice !== undefined && job.sales)
                 await tx.sales.update({ where: { invoiceId: job.sales.invoiceId }, data: { price: sellingPrice } });
             return;
@@ -273,15 +269,10 @@ async function applyUpdate(tx, request, changes) {
                     category,
                     quantityIn, quantityOut, quantityLoss,
                     ...(changes.unitPrice !== undefined ? { unitPrice: changes.unitPrice } : {}),
-                    goldIn: category === 'GOLD' ? quantityIn : 0,
-                    goldOut: category === 'GOLD' ? quantityOut : 0,
-                    scraps: category === 'GOLD' ? quantityLoss : 0,
                     ...(changes.unit !== undefined ? { unit: changes.unit } : {}),
                     updatedAt: date('updatedAt') ?? date('date') ?? new Date(),
                 } });
-            const updated = await tx.inventory.findUniqueOrThrow({ where: { referenceId: id } });
-            await (0, inventoryLedger_1.syncInventoryExpense)(tx, { ...updated, unitPrice: updated.unitPrice });
-            await (0, inventoryLedger_1.recalculateInventory)(tx);
+            await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             return;
         }
         case 'CLIENT':
@@ -307,8 +298,6 @@ async function applyDelete(tx, request) {
                 if (sale.job.inquiryId)
                     await tx.inquiries.update({ where: { inquiryId: sale.job.inquiryId }, data: { status: 'PENDING' } });
             }
-            const activeSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, payment: true } });
-            await tx.client.update({ where: { clientId: sale.clientId }, data: { balance: activeSales.reduce((sum, row) => sum + Math.max(0, Number(row.price) - Number(row.payment)), 0) } });
             return;
         }
         case 'JOB_COST': {
@@ -319,7 +308,7 @@ async function applyDelete(tx, request) {
             const movements = await tx.inventory.findMany({ where: { jobCostId: id, deletedAt: null } });
             if (movements.length) {
                 await tx.inventory.updateMany({ where: { jobCostId: id, deletedAt: null }, data: { deletedAt: now } });
-                await (0, inventoryLedger_1.recalculateInventory)(tx);
+                await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             }
             if (job.sales)
                 await tx.sales.update({ where: { invoiceId: job.sales.invoiceId }, data: { deletedAt: now } });
@@ -337,21 +326,15 @@ async function applyDelete(tx, request) {
             return;
         }
         case 'EXPENSE': {
-            const expense = await tx.expenses.findFirst({ where: { expenseId: id, deletedAt: null }, include: { inventory: true } });
+            const expense = await tx.expenses.findFirst({ where: { expenseId: id, deletedAt: null } });
             if (!expense)
                 throw new Error('Expense is no longer active.');
             await tx.expenses.update({ where: { expenseId: id }, data: { deletedAt: now } });
-            if (expense.inventory && !expense.inventory.deletedAt) {
-                await tx.inventory.update({ where: { referenceId: expense.inventory.referenceId }, data: { deletedAt: now } });
-                await (0, inventoryLedger_1.recalculateInventory)(tx);
-            }
             return;
         }
         case 'INVENTORY': {
             await tx.inventory.update({ where: { referenceId: id }, data: { deletedAt: now } });
-            const movement = await tx.inventory.findUniqueOrThrow({ where: { referenceId: id } });
-            await (0, inventoryLedger_1.syncInventoryExpense)(tx, { ...movement, unitPrice: movement.unitPrice, deletedAt: now });
-            await (0, inventoryLedger_1.recalculateInventory)(tx);
+            await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             return;
         }
         case 'CLIENT':

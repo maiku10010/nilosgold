@@ -32,7 +32,7 @@ function parseMovement(body, existing) {
         return 'Enter a valid non-negative unit price.';
     if (body.date !== undefined && !(0, validation_1.isValidNonFutureDate)(body.date))
         return 'Inventory date must be a valid date no later than today.';
-    return { category, itemName, unit, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
+    return { category: category, itemName, unit, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
 }
 router.post('/', async (req, res) => {
     try {
@@ -44,14 +44,14 @@ router.post('/', async (req, res) => {
                     referenceId: (0, friendlyId_1.friendlyId)(), universalReferenceId: (0, friendlyId_1.friendlyId)(), itemName: parsed.itemName, unit: parsed.unit, category: parsed.category,
                     quantityIn: parsed.quantityIn, quantityOut: parsed.quantityOut, quantityLoss: parsed.quantityLoss,
                     unitPrice: parsed.unitPrice,
-                    goldIn: parsed.category === 'GOLD' ? parsed.quantityIn : 0,
-                    goldOut: parsed.category === 'GOLD' ? parsed.quantityOut : 0,
-                    scraps: parsed.category === 'GOLD' ? parsed.quantityLoss : 0,
                     updatedAt: parsed.date ?? new Date(),
                 } });
-            await (0, inventoryLedger_1.syncInventoryExpense)(tx, { ...created, unitPrice: parsed.unitPrice });
-            await (0, inventoryLedger_1.recalculateInventory)(tx);
-            return tx.inventory.findUnique({ where: { referenceId: created.referenceId } });
+            await (0, inventoryLedger_1.validateInventoryLedger)(tx);
+            const rows = await tx.inventory.findMany({ where: { deletedAt: null }, orderBy: [{ updatedAt: 'asc' }, { referenceId: 'asc' }] });
+            const balances = (0, inventoryLedger_1.calculateInventoryBalances)(rows);
+            const saved = rows.find(row => row.referenceId === created.referenceId);
+            const balance = balances.get(created.referenceId) ?? 0;
+            return { ...saved, balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
         }, { isolationLevel: client_1.Prisma.TransactionIsolationLevel.Serializable });
         res.status(201).json(saved);
     }
@@ -67,7 +67,8 @@ router.get('/', async (req, res) => {
         if (category && !categories.includes(category))
             return res.status(400).json({ error: 'Choose a supported inventory category.' });
         const rows = await db_1.prisma.inventory.findMany({ where: { deletedAt: null, ...(category ? { category } : {}) }, orderBy: [{ updatedAt: 'asc' }, { referenceId: 'asc' }] });
-        res.json(rows);
+        const balances = (0, inventoryLedger_1.calculateInventoryBalances)(rows);
+        res.json(rows.map(row => ({ ...row, balance: balances.get(row.referenceId) ?? 0, totalGold: row.category === 'GOLD' ? balances.get(row.referenceId) ?? 0 : 0 })));
     }
     catch (error) {
         console.error('Error fetching inventory items:', error);
@@ -88,14 +89,14 @@ router.put('/:referenceId', async (req, res) => {
                     itemName: parsed.itemName, unit: parsed.unit, category: parsed.category,
                     quantityIn: parsed.quantityIn, quantityOut: parsed.quantityOut, quantityLoss: parsed.quantityLoss,
                     unitPrice: parsed.unitPrice,
-                    goldIn: parsed.category === 'GOLD' ? parsed.quantityIn : 0,
-                    goldOut: parsed.category === 'GOLD' ? parsed.quantityOut : 0,
-                    scraps: parsed.category === 'GOLD' ? parsed.quantityLoss : 0,
                     updatedAt: parsed.date ?? new Date(),
                 } });
-            await (0, inventoryLedger_1.syncInventoryExpense)(tx, { referenceId: targetId, category: parsed.category, itemName: parsed.itemName, unit: parsed.unit, quantityIn: parsed.quantityIn, unitPrice: parsed.unitPrice, updatedAt: parsed.date ?? new Date() });
-            await (0, inventoryLedger_1.recalculateInventory)(tx);
-            return tx.inventory.findUnique({ where: { referenceId: targetId } });
+            await (0, inventoryLedger_1.validateInventoryLedger)(tx);
+            const rows = await tx.inventory.findMany({ where: { deletedAt: null }, orderBy: [{ updatedAt: 'asc' }, { referenceId: 'asc' }] });
+            const balances = (0, inventoryLedger_1.calculateInventoryBalances)(rows);
+            const saved = rows.find(row => row.referenceId === targetId);
+            const balance = balances.get(targetId) ?? 0;
+            return { ...saved, balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
         }, { isolationLevel: client_1.Prisma.TransactionIsolationLevel.Serializable });
         res.json(saved);
     }
@@ -112,10 +113,7 @@ router.delete('/:referenceId', async (req, res) => {
             const result = await tx.inventory.updateMany({ where: { referenceId: targetId, deletedAt: null }, data: { deletedAt: new Date() } });
             if (!result.count)
                 return 0;
-            const movement = await tx.inventory.findUnique({ where: { referenceId: targetId } });
-            if (movement)
-                await (0, inventoryLedger_1.syncInventoryExpense)(tx, { ...movement, unitPrice: movement.unitPrice, deletedAt: new Date() });
-            await (0, inventoryLedger_1.recalculateInventory)(tx);
+            await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             return result.count;
         }, { isolationLevel: client_1.Prisma.TransactionIsolationLevel.Serializable });
         if (!deleted)

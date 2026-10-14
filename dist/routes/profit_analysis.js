@@ -19,13 +19,14 @@ router.get('/', async (req, res) => {
             db_1.prisma.inquiries.count({ where: { deletedAt: null, inqDate: { gte: start, lte: end } } }),
         ]);
         const revenue = sales.reduce((sum, sale) => sum + Number(sale.price), 0);
+        const incompleteJobCostings = sales.filter(sale => sale.job && !sale.job.deletedAt && !sale.job.sourceDataComplete).length;
         const jobCost = sales.reduce((sum, sale) => {
             if (!sale.job || sale.job.deletedAt)
                 return sum;
-            return sum + Number((Number(sale.job.goldUsed) * Number(sale.job.goldCostPerG)).toFixed(2)) + Number(sale.job.stoneCost) + Number(sale.job.laborCost);
+            return sum + Number((Number(sale.job.goldUsed) * Number(sale.job.goldCostPerG)).toFixed(2)) + Number(sale.job.stoneCost) + Number(sale.job.laborCost) + Number(sale.job.otherCost);
         }, 0);
         const operatingExpenses = Number(expenses._sum.amount ?? 0);
-        res.json({ start: start.toISOString(), end: end.toISOString(), revenue, jobCost, grossProfit: revenue - jobCost, expenses: operatingExpenses, netProfit: revenue - jobCost - operatingExpenses, netMargin: revenue ? ((revenue - jobCost - operatingExpenses) / revenue) * 100 : 0, inquiries, salesCount: sales.length });
+        res.json({ start: start.toISOString(), end: end.toISOString(), revenue, jobCost, grossProfit: revenue - jobCost, expenses: operatingExpenses, netProfit: revenue - jobCost - operatingExpenses, netMargin: revenue ? ((revenue - jobCost - operatingExpenses) / revenue) * 100 : 0, inquiries, salesCount: sales.length, costDataComplete: incompleteJobCostings === 0, incompleteJobCostings });
     }
     catch (error) {
         console.error('Profit analysis could not be loaded:', error);

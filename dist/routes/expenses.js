@@ -33,8 +33,17 @@ router.post('/', async (req, res) => {
 //read operation for expenses
 router.get('/', async (req, res) => {
     try {
-        const allExpenses = await db_1.prisma.expenses.findMany({ where: { deletedAt: null }, orderBy: { expDate: 'desc' } });
-        res.json(allExpenses);
+        const [allExpenses, purchases] = await Promise.all([
+            db_1.prisma.expenses.findMany({ where: { deletedAt: null }, orderBy: { expDate: 'desc' } }),
+            db_1.prisma.inventory.findMany({ where: { deletedAt: null, quantityIn: { gt: 0 } }, orderBy: { updatedAt: 'desc' } }),
+        ]);
+        const inventoryExpenses = purchases.map(row => ({
+            expenseId: `inventory-${row.referenceId}`, category: `Inventory · ${row.category}`,
+            amount: Number(row.quantityIn) * Number(row.unitPrice),
+            description: `Purchase: ${row.itemName} (${row.quantityIn} ${row.unit}) at ${Number(row.unitPrice).toFixed(2)} per ${row.unit}`,
+            expDate: row.updatedAt, source: 'inventory',
+        }));
+        res.json([...allExpenses, ...inventoryExpenses].sort((a, b) => new Date(b.expDate).getTime() - new Date(a.expDate).getTime()));
     }
     catch (error) {
         console.error('Error fetching expenses:', error);
@@ -47,6 +56,8 @@ router.put('/:expenseId', async (req, res) => {
         const targetId = Array.isArray(req.params.expenseId)
             ? req.params.expenseId[0]
             : req.params.expenseId;
+        if (targetId.startsWith('inventory-'))
+            return res.status(409).json({ error: 'Update inventory purchases from the Inventory page.' });
         const date = req.body.expDate;
         if (date !== undefined && !(0, validation_1.isValidNonFutureDate)(date))
             return res.status(400).json({ error: 'Expense date must be a valid date no later than today.' });
@@ -77,16 +88,24 @@ router.delete('/:expenseId', async (req, res) => {
         const targetId = Array.isArray(req.params.expenseId)
             ? req.params.expenseId[0]
             : req.params.expenseId;
+        if (targetId.startsWith('inventory-')) {
+            const referenceId = targetId.slice('inventory-'.length);
+            const deleted = await db_1.prisma.$transaction(async (tx) => {
+                const result = await tx.inventory.updateMany({ where: { referenceId, deletedAt: null }, data: { deletedAt: new Date() } });
+                if (result.count)
+                    await (0, inventoryLedger_1.validateInventoryLedger)(tx);
+                return result.count;
+            });
+            if (!deleted)
+                return res.status(404).json({ error: 'Inventory purchase not found or already archived.' });
+            return res.json({ message: 'Inventory purchase archived.' });
+        }
         const deleted = await db_1.prisma.$transaction(async (tx) => {
-            const expense = await tx.expenses.findFirst({ where: { expenseId: targetId, deletedAt: null }, include: { inventory: true } });
+            const expense = await tx.expenses.findFirst({ where: { expenseId: targetId, deletedAt: null } });
             if (!expense)
                 return false;
             const deletedAt = new Date();
             await tx.expenses.update({ where: { expenseId: targetId }, data: { deletedAt } });
-            if (expense.inventory && !expense.inventory.deletedAt) {
-                await tx.inventory.update({ where: { referenceId: expense.inventory.referenceId }, data: { deletedAt } });
-                await (0, inventoryLedger_1.recalculateInventory)(tx);
-            }
             return true;
         });
         if (!deleted)

@@ -6,9 +6,10 @@ const validation_1 = require("../validation");
 const email_1 = require("../services/email");
 const friendlyId_1 = require("../friendlyId");
 const inventoryLedger_1 = require("../inventoryLedger");
+const accounting_1 = require("../accounting");
 const router = (0, express_1.Router)();
 const serviceTypes = ['Custom', 'Repair', 'Resize', 'Cleaning'];
-const saleIncludes = { client: true, job: { include: { inquiry: true } } };
+const saleIncludes = { client: true, job: { include: { inquiry: true } }, payments: true };
 // Sales are opened when a pending inquiry is approved for costing. A new
 // finished sale can only be completed through this transition endpoint.
 router.post('/', (_req, res) => {
@@ -17,7 +18,7 @@ router.post('/', (_req, res) => {
 router.get('/', async (_req, res) => {
     try {
         const sales = await db_1.prisma.sales.findMany({ where: { deletedAt: null }, include: saleIncludes, orderBy: { salesDate: 'desc' } });
-        res.json(sales);
+        res.json(sales.map(accounting_1.withSaleTotals));
     }
     catch (error) {
         console.error('Error fetching sales:', error);
@@ -33,7 +34,7 @@ router.post('/:invoiceId/finish', async (req, res) => {
             return res.status(400).json({ error: 'Confirm the exact client name and invoice number to finish this sale.' });
         }
         const sale = await db_1.prisma.$transaction(async (tx) => {
-            const current = await tx.sales.findUnique({ where: { invoiceId }, include: { client: true, job: { include: { inquiry: true } } } });
+            const current = await tx.sales.findUnique({ where: { invoiceId }, include: { client: true, job: { include: { inquiry: true } }, payments: true } });
             if (!current)
                 throw Object.assign(new Error('Invoice not found.'), { statusCode: 404 });
             if (current.deletedAt)
@@ -62,7 +63,7 @@ router.post('/:invoiceId/finish', async (req, res) => {
                     } });
             }
             if (deductions.size)
-                await (0, inventoryLedger_1.recalculateInventory)(tx);
+                await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             const finished = await tx.sales.update({
                 where: { invoiceId },
                 data: { status: 'FINISHED', salesDate: new Date() },
@@ -71,14 +72,7 @@ router.post('/:invoiceId/finish', async (req, res) => {
             if (current.job.inquiryId) {
                 await tx.inquiries.update({ where: { inquiryId: current.job.inquiryId }, data: { status: 'FINISHED' } });
             }
-            const otherSales = await tx.sales.findMany({
-                where: { clientId: current.clientId, invoiceId: { not: invoiceId }, deletedAt: null },
-                select: { price: true, payment: true },
-            });
-            const balance = otherSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.payment)), 0)
-                + Math.max(0, Number(finished.price) - Number(finished.payment));
-            await tx.client.update({ where: { clientId: current.clientId }, data: { balance } });
-            return tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes });
+            return (0, accounting_1.withSaleTotals)(await tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes }));
         });
         res.json(sale);
     }
@@ -100,18 +94,18 @@ router.post('/:invoiceId/receipt', async (req, res) => {
         if (!sale || sale.status !== 'FINISHED')
             return res.status(404).json({ error: 'Finished sale not found.' });
         if (sale.receiptSentAt)
-            return res.json({ ...sale, notification: { sent: true, alreadySent: true } });
+            return res.json({ ...(0, accounting_1.withSaleTotals)(sale), notification: { sent: true, alreadySent: true } });
         if (req.body.email !== undefined && req.body.email !== sale.client.email?.trim()) {
             return res.status(409).json({ error: 'The customer email changed. Refresh Daily Sales and confirm the current address before sending.' });
         }
-        const notification = await (0, email_1.sendSystemEmail)(sale.client.email, `Official Receipt · ${sale.invoiceId}`, (0, email_1.receiptEmail)(sale), `official-receipt-${sale.invoiceId}`);
+        const notification = await (0, email_1.sendSystemEmail)(sale.client.email, `Official Receipt · ${sale.invoiceId}`, (0, email_1.receiptEmail)((0, accounting_1.withSaleTotals)(sale)), `official-receipt-${sale.invoiceId}`);
         if (!notification.sent)
             return res.json({ ...sale, notification });
         // Concurrent provider replays must not replace the first recorded timestamp.
         try {
             await db_1.prisma.sales.updateMany({ where: { invoiceId, receiptSentAt: null }, data: { receiptSentAt: new Date() } });
             const updated = await db_1.prisma.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes });
-            return res.json({ ...updated, notification });
+            return res.json({ ...(0, accounting_1.withSaleTotals)(updated), notification });
         }
         catch (error) {
             console.error('Receipt accepted but timestamp could not be saved:', error);
@@ -144,7 +138,7 @@ router.put('/:invoiceId', async (req, res) => {
             return res.status(400).json({ error: 'The client name and invoice number are required to update a sale.' });
         }
         const updated = await db_1.prisma.$transaction(async (tx) => {
-            const current = await tx.sales.findFirst({ where: { invoiceId, deletedAt: null }, include: { client: true } });
+            const current = await tx.sales.findFirst({ where: { invoiceId, deletedAt: null }, include: { client: true, payments: true } });
             if (!current)
                 throw Object.assign(new Error('Invoice not found.'), { statusCode: 404 });
             if (current.status === 'PENDING')
@@ -157,7 +151,6 @@ router.put('/:invoiceId', async (req, res) => {
                 data: {
                     serviceType: req.body.serviceType,
                     price,
-                    payment,
                     ...(date ? { salesDate: new Date(`${date}T00:00:00`) } : {}),
                     client: { update: {
                             ...(typeof req.body.contactNum === 'string' ? { contactNum: req.body.contactNum.trim() } : {}),
@@ -165,16 +158,11 @@ router.put('/:invoiceId', async (req, res) => {
                         } },
                 },
             });
-            const outstandingSales = await tx.sales.findMany({
-                where: { clientId: current.clientId, deletedAt: null },
-                select: { price: true, payment: true },
-            });
-            const updatedAmounts = await tx.sales.findMany({ where: { clientId: current.clientId, deletedAt: null }, select: { price: true, payment: true } });
+            await (0, accounting_1.setSalePaidTotal)(tx, invoiceId, payment);
             await tx.client.update({ where: { clientId: current.clientId }, data: {
                     clientName: req.body.clientName.trim(),
-                    balance: updatedAmounts.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.payment)), 0),
                 } });
-            return tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes });
+            return (0, accounting_1.withSaleTotals)(await tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes }));
         });
         res.json(updated);
     }
@@ -198,17 +186,13 @@ router.delete('/:invoiceId', async (req, res) => {
                 await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
                 await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
                 await tx.inventory.updateMany({ where: { jobCostId: sale.job.jobCostId, deletedAt: null }, data: { deletedAt: new Date() } });
-                await (0, inventoryLedger_1.recalculateInventory)(tx);
+                await (0, inventoryLedger_1.validateInventoryLedger)(tx);
                 if (inquiryId)
                     await tx.inquiries.update({ where: { inquiryId }, data: { status: 'PENDING' } });
             }
             else {
                 await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
             }
-            const remainingSales = await tx.sales.findMany({ where: { clientId: sale.clientId, deletedAt: null }, select: { price: true, payment: true } });
-            await tx.client.update({ where: { clientId: sale.clientId }, data: {
-                    balance: remainingSales.reduce((sum, item) => sum + Math.max(0, Number(item.price) - Number(item.payment)), 0),
-                } });
         });
         res.json({ message: 'Sale deleted; its inquiry has been reopened when applicable.' });
     }

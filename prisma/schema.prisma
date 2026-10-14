@@ -40,15 +40,27 @@ enum ApprovalStatus {
   REJECTED
 }
 
+enum InventoryCategory {
+  GOLD
+  SILVER
+  GEMSTONES
+  BOXES
+  PACKAGING
+  FINDINGS
+  TOOLS
+
+  @@map("inventory_category")
+}
+
 model Client {
   clientId   String  @id
   clientName String
   contactNum String?
   email      String?
-  balance    Decimal @default(0.00)
 
   inquiries Inquiries[]
   sales     Sales[]
+  jobCosts  Job_Cost[]
   deletedAt DateTime?
 
   createdAt DateTime @default(now())
@@ -110,14 +122,20 @@ model Job_Cost {
   goldScrap       Decimal   @default(0.00) @map("gold_scrap")
   stoneCost       Decimal   @default(0.00)
   laborCost       Decimal   @default(0.00)
+  laborCharge     Decimal   @default(0.00) @map("labor_charge")
+  otherCost       Decimal   @default(0.00) @map("other_cost")
+  sourceDataComplete Boolean @default(true) @map("source_data_complete")
+  sourceNotes String? @map("source_notes")
   goldCostPerG    Decimal   @default(0.00) @db.Decimal(12, 2)
   status          JobStatus @default(IN_PROGRESS)
-  jobDate         DateTime  @default(now()) @map("date")
+  jobDate         DateTime? @default(now()) @map("date")
   readyNotifiedAt DateTime?
   deletedAt       DateTime?
 
-  empId    String
-  employee Employee @relation(fields: [empId], references: [empId], onDelete: Restrict)
+  empId    String?
+  employee Employee? @relation(fields: [empId], references: [empId], onDelete: SetNull)
+  clientId String? @map("client_id")
+  client   Client? @relation(fields: [clientId], references: [clientId], onDelete: SetNull)
 
   inquiryId String?    @unique
   inquiry   Inquiries? @relation(fields: [inquiryId], references: [inquiryId], onDelete: SetNull)
@@ -126,6 +144,10 @@ model Job_Cost {
   // invoice number and client relation used by the UI to match name + invoice.
   sales Sales?
   inventoryMovement Inventory[] @relation("JobCostInventoryMovement")
+  sourceSheet String? @map("source_sheet")
+  sourceRow Int? @map("source_row")
+
+  @@unique([sourceSheet, sourceRow])
 
   @@map("job_costs")
 }
@@ -135,7 +157,6 @@ model Sales {
   universalReferenceId String? @unique @map("universal_reference_id")
   serviceType   String
   price         Decimal
-  payment       Decimal     @default(0.00)
   status        SalesStatus @default(PAID)
   salesDate     DateTime    @default(now()) @map("date")
   receiptSentAt DateTime?
@@ -147,6 +168,15 @@ model Sales {
   // One sale can be linked to one costing; uniqueness prevents duplicate sales.
   jobCostId String?   @unique
   job       Job_Cost? @relation(fields: [jobCostId], references: [jobCostId], onDelete: SetNull)
+  payments SalePayment[]
+  sourceSheet String? @map("source_sheet")
+  sourceRow Int? @map("source_row")
+  sourceInvoiceNumber String? @map("source_invoice_number")
+  sourceDate String? @map("source_date")
+  sourceStatus String? @map("source_status")
+  sourceType String? @map("source_type")
+
+  @@unique([sourceSheet, sourceRow])
 
   @@map("sales")
 }
@@ -157,21 +187,20 @@ model Inventory {
   itemName    String
   unit        String
   unitPrice   Decimal   @default(0.00)
-  category    String    @default("GOLD")
+  category    InventoryCategory @default(GOLD)
   quantityIn  Decimal   @default(0.00)
   quantityOut Decimal   @default(0.00)
   quantityLoss Decimal  @default(0.00)
-  balance     Decimal   @default(0.00)
-  goldIn      Decimal   @default(0.00)
-  goldOut     Decimal   @default(0.00)
-  scraps      Decimal   @default(0.00)
-  totalGold   Decimal   @default(0.00)
   updatedAt   DateTime  @default(now()) @map("date")
   deletedAt   DateTime?
 
-  costExpense Expenses? @relation("InventoryCostExpense")
   jobCostId   String?
   jobCost     Job_Cost? @relation("JobCostInventoryMovement", fields: [jobCostId], references: [jobCostId], onDelete: SetNull)
+  sourceSheet String? @map("source_sheet")
+  sourceRow Int? @map("source_row")
+  sourceDate String? @map("source_date")
+
+  @@unique([sourceSheet, sourceRow])
 
   @@map("inventory")
 }
@@ -183,10 +212,29 @@ model Expenses {
   description String?
   expDate     DateTime  @default(now()) @map("date")
   deletedAt   DateTime?
-  inventoryReferenceId String? @unique
-  inventory Inventory? @relation("InventoryCostExpense", fields: [inventoryReferenceId], references: [referenceId], onDelete: SetNull)
+  sourceSheet String? @map("source_sheet")
+  sourceRow Int? @map("source_row")
+
+  @@unique([sourceSheet, sourceRow])
 
   @@map("expenses")
+}
+
+model SalePayment {
+  paymentId String @id @map("payment_id")
+  invoiceId String @map("invoice_id")
+  amount Decimal @db.Decimal(12, 2)
+  paidAt DateTime? @map("paid_at")
+  paymentNumber Int? @map("payment_number")
+  method String?
+  notes String?
+  sourceSheet String? @map("source_sheet")
+  sourceRow Int? @map("source_row")
+  sale Sales @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+
+  @@unique([sourceSheet, sourceRow, paymentNumber])
+  @@index([invoiceId, paidAt])
+  @@map("sale_payments")
 }
 
 model AuthSession {
