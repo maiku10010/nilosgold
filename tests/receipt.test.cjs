@@ -2,7 +2,7 @@ const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 // Replace the database module before importing routes: never connect to live data.
-const prisma = { sales: {}, client: {}, approvalRequest: {}, systemLog: {} };
+const prisma = { sales: {}, salePayment: {}, client: {}, approvalRequest: {}, systemLog: {} };
 require.cache[require.resolve('../dist/db')] = { exports: { prisma } };
 const salesRouter = require('../dist/routes/sales').default;
 const approvals = require('../dist/approvals');
@@ -21,7 +21,8 @@ async function send(body = { confirm: true, invoiceId: 'INV-1' }) {
 
 beforeEach(() => {
   sale = { invoiceId: 'INV-1', clientId: 'C-1', status: 'FINISHED', deletedAt: null, receiptSentAt: null,
-    salesDate: new Date('2026-01-01'), price: 100, payment: 50, serviceType: 'Repair',
+    salesDate: new Date('2026-01-01'), price: 100, serviceType: 'Repair',
+    payments: [{ paymentId: 'PAY-1', invoiceId: 'INV-1', amount: 50, paidAt: new Date('2026-01-01'), paymentNumber: 1 }],
     client: { clientName: 'Test Customer', email: 'customer@example.com' } };
   calls = []; writes = 0;
   process.env.RESEND_API_KEY = 'test-only'; process.env.EMAIL_FROM = 'sender@example.com';
@@ -34,6 +35,19 @@ beforeEach(() => {
   };
   prisma.sales.update = async ({ data }) => { if (data.client) Object.assign(sale.client, data.client.update); return sale; };
   prisma.sales.findMany = async () => [sale];
+  prisma.salePayment.findMany = async () => structuredClone(sale.payments);
+  prisma.salePayment.create = async ({ data }) => {
+    const payment = { ...data, paymentId: data.paymentId || `PAY-${sale.payments.length + 1}` };
+    sale.payments.push(payment); return payment;
+  };
+  prisma.salePayment.delete = async ({ where }) => {
+    const index = sale.payments.findIndex(payment => payment.paymentId === where.paymentId);
+    return sale.payments.splice(index, 1)[0];
+  };
+  prisma.salePayment.update = async ({ where, data }) => {
+    const payment = sale.payments.find(payment => payment.paymentId === where.paymentId);
+    Object.assign(payment, data); return payment;
+  };
   prisma.client.update = async ({ data }) => Object.assign(sale.client, data);
   prisma.$transaction = async fn => fn(prisma);
   prisma.systemLog.create = async () => ({});
