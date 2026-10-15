@@ -128,8 +128,6 @@ model Job_Cost {
   laborCost       Decimal   @default(0.00)
   laborCharge     Decimal   @default(0.00) @map("labor_charge")
   otherCost       Decimal   @default(0.00) @map("other_cost")
-  sourceDataComplete Boolean @default(true) @map("source_data_complete")
-  sourceNotes String? @map("source_notes")
   goldCostPerG    Decimal   @default(0.00) @db.Decimal(12, 2)
   status          JobStatus @default(IN_PROGRESS)
   jobDate         DateTime? @default(now()) @map("date")
@@ -148,11 +146,6 @@ model Job_Cost {
   // invoice number and client relation used by the UI to match name + invoice.
   sales Sales?
   inventoryMovement Inventory[] @relation("JobCostInventoryMovement")
-  sourceSheet String? @map("source_sheet")
-  sourceRow Int? @map("source_row")
-
-  @@unique([sourceSheet, sourceRow])
-
   @@map("job_costs")
 }
 
@@ -173,14 +166,6 @@ model Sales {
   jobCostId String?   @unique
   job       Job_Cost? @relation(fields: [jobCostId], references: [jobCostId], onDelete: SetNull)
   payments SalePayment[]
-  sourceSheet String? @map("source_sheet")
-  sourceRow Int? @map("source_row")
-  sourceInvoiceNumber String? @map("source_invoice_number")
-  sourceDate String? @map("source_date")
-  sourceStatus String? @map("source_status")
-  sourceType String? @map("source_type")
-
-  @@unique([sourceSheet, sourceRow])
 
   @@map("sales")
 }
@@ -202,11 +187,6 @@ model Inventory {
 
   jobCostId   String?
   jobCost     Job_Cost? @relation("JobCostInventoryMovement", fields: [jobCostId], references: [jobCostId], onDelete: SetNull)
-  sourceSheet String? @map("source_sheet")
-  sourceRow Int? @map("source_row")
-  sourceDate String? @map("source_date")
-
-  @@unique([sourceSheet, sourceRow])
 
   @@map("inventory")
 }
@@ -218,10 +198,6 @@ model Expenses {
   description String?
   expDate     DateTime  @default(now()) @map("date")
   deletedAt   DateTime?
-  sourceSheet String? @map("source_sheet")
-  sourceRow Int? @map("source_row")
-
-  @@unique([sourceSheet, sourceRow])
 
   @@map("expenses")
 }
@@ -234,11 +210,9 @@ model SalePayment {
   paymentNumber Int? @map("payment_number")
   method String?
   notes String?
-  sourceSheet String? @map("source_sheet")
-  sourceRow Int? @map("source_row")
+
   sale Sales @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
 
-  @@unique([sourceSheet, sourceRow, paymentNumber])
   @@index([invoiceId, paidAt])
   @@map("sale_payments")
 }
@@ -296,48 +270,3 @@ model ApprovalRequest {
   @@map("approval_requests")
 }
 
-// Historical invoices deliberately keep assumed settlements separate from cash.
-// Nullable money supports pulled-out records without creating zero-value sales.
-model LegacyInvoice {
-  recordId             String   @id @map("record_id")
-  legacyInvoice        String   @map("legacy_invoice")
-  sourceFile           String   @map("source_file")
-  sourceRow            Int      @map("source_row")
-  invoiceDate          DateTime? @db.Date @map("invoice_date")
-  dateEstimated        Boolean  @default(false) @map("date_estimated")
-  customerName         String?  @map("customer_name")
-  description          String?
-  status               String
-  pulledOut            Boolean  @default(false) @map("pulled_out")
-  salePrice            Decimal? @db.Decimal(18, 2) @map("sale_price")
-  recordedPayment      Decimal? @db.Decimal(18, 2) @map("recorded_payment")
-  assumedPayment       Decimal? @db.Decimal(18, 2) @map("assumed_payment")
-  reconciledPayment    Decimal? @db.Decimal(18, 2) @map("reconciled_payment")
-  balance              Decimal? @db.Decimal(18, 2)
-  excessPayment        Decimal? @db.Decimal(18, 2) @map("excess_payment")
-  excessClassification String?  @map("excess_classification")
-  sourceRows           LegacySheetRow[]
-
-  @@unique([sourceFile, sourceRow])
-  @@index([legacyInvoice])
-  @@index([invoiceDate, status])
-  @@map("legacy_invoices")
-}
-
-// All ten files, including reports, corrections, item lines and deferred stock.
-// This is provenance/staging, not an additional sale/payment/inventory ledger.
-model LegacySheetRow {
-  recordId        String @id @map("record_id")
-  sourceFile      String @map("source_file")
-  sourceRow       Int    @map("source_row")
-  sourceSha256    String @map("source_sha256")
-  processing      String
-  invoiceRecordId String? @map("invoice_record_id")
-  invoice         LegacyInvoice? @relation(fields: [invoiceRecordId], references: [recordId], onDelete: Restrict)
-  originalData    Json   @map("original_data")
-  cleanedData     Json   @map("cleaned_data")
-
-  @@unique([sourceFile, sourceRow])
-  @@index([invoiceRecordId])
-  @@map("legacy_sheet_rows")
-}
