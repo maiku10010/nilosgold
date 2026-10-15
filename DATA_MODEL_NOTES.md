@@ -1,5 +1,11 @@
 # Historical data and normalized model
 
+> For the ten `*_clean.csv`/audit files supplied on October 15, 2026, use
+> [LEGACY_RECONCILIATION.md](LEGACY_RECONCILIATION.md). Its user-authorized LIN,
+> settlement, status, null and inventory-deferral rules supersede the older
+> source-specific assumptions below. The old importer is not compatible with
+> the reconciled output package.
+
 ## Source mapping
 
 - `dailysales.csv` supplies sale records, cleaned customer names and contacts, source invoice numbers, service descriptions, and the first payment. A sale uses a date-qualified internal ID because invoice numbers repeat. Duplicate date, invoice, and customer rows are consolidated. Summary, week, and repeated-header rows are excluded.
@@ -23,5 +29,12 @@
 - CSV formulas, running balances, report totals, calculated total cost, gross profit, and margin are not imported as independent facts. The runtime/database relationships are the source of truth for those values.
 
 ## Data quality rules
+
+### Gold karats
+
+- Inquiries, job costing, and inventory expose optional Prisma `goldKarat`, stored as `gold_karat` (`smallint`). Every whole-number karat from 10 to 24 is supported.
+- The `add_gold_karat` Supabase migration enforces the range with database CHECK constraints. Inventory permits a specified karat only for the GOLD category.
+- NULL means unspecified; existing records are not assigned an assumed purity. A costing or inventory movement records one karat; separate movements represent different karats.
+- This is a schema addition only. API input handling, inquiry-to-job propagation, UI selectors, pricing, and stock aggregation by karat require application changes before using karats operationally. Apply the SQL migration before deploying the regenerated Prisma client; `prisma db push` alone does not install these CHECK constraints.
 
 Names and spacing are normalized; phone numbers are reduced to digits and Philippine `+63`/10-digit mobile formats are normalized to `09...`. Invalid dates and non-transaction rows are not assigned invented dates. Imported rows carry source sheet and row metadata so omissions and duplicates can be traced back to the original CSV.

@@ -95,6 +95,8 @@ model Inquiries {
   universalReferenceId String? @unique @map("universal_reference_id")
   isFullyPaid Boolean @default(false)
   category     String
+  /// Whole-number karat, 10 through 24; NULL means unspecified.
+  goldKarat    Int? @db.SmallInt @map("gold_karat")
   quotedPrice  Decimal
   customerName String
   contactInfo  String?
@@ -119,6 +121,8 @@ model Job_Cost {
   itemName        String?   @map("item_name")
   deadline        DateTime? @map("delivery_date")
   goldUsed        Decimal   @default(0.00)
+  /// Whole-number karat, 10 through 24; enforced by the SQL migration.
+  goldKarat       Int? @db.SmallInt @map("gold_karat")
   goldScrap       Decimal   @default(0.00) @map("gold_scrap")
   stoneCost       Decimal   @default(0.00)
   laborCost       Decimal   @default(0.00)
@@ -188,6 +192,8 @@ model Inventory {
   unit        String
   unitPrice   Decimal   @default(0.00)
   category    InventoryCategory @default(GOLD)
+  /// Only GOLD may have a karat; NULL preserves unknown historical purity.
+  goldKarat   Int? @db.SmallInt @map("gold_karat")
   quantityIn  Decimal   @default(0.00)
   quantityOut Decimal   @default(0.00)
   quantityLoss Decimal  @default(0.00)
@@ -288,4 +294,50 @@ model ApprovalRequest {
   @@index([status, createdAt(sort: Desc)])
   @@index([entityType, entityId, status])
   @@map("approval_requests")
+}
+
+// Historical invoices deliberately keep assumed settlements separate from cash.
+// Nullable money supports pulled-out records without creating zero-value sales.
+model LegacyInvoice {
+  recordId             String   @id @map("record_id")
+  legacyInvoice        String   @map("legacy_invoice")
+  sourceFile           String   @map("source_file")
+  sourceRow            Int      @map("source_row")
+  invoiceDate          DateTime? @db.Date @map("invoice_date")
+  dateEstimated        Boolean  @default(false) @map("date_estimated")
+  customerName         String?  @map("customer_name")
+  description          String?
+  status               String
+  pulledOut            Boolean  @default(false) @map("pulled_out")
+  salePrice            Decimal? @db.Decimal(18, 2) @map("sale_price")
+  recordedPayment      Decimal? @db.Decimal(18, 2) @map("recorded_payment")
+  assumedPayment       Decimal? @db.Decimal(18, 2) @map("assumed_payment")
+  reconciledPayment    Decimal? @db.Decimal(18, 2) @map("reconciled_payment")
+  balance              Decimal? @db.Decimal(18, 2)
+  excessPayment        Decimal? @db.Decimal(18, 2) @map("excess_payment")
+  excessClassification String?  @map("excess_classification")
+  sourceRows           LegacySheetRow[]
+
+  @@unique([sourceFile, sourceRow])
+  @@index([legacyInvoice])
+  @@index([invoiceDate, status])
+  @@map("legacy_invoices")
+}
+
+// All ten files, including reports, corrections, item lines and deferred stock.
+// This is provenance/staging, not an additional sale/payment/inventory ledger.
+model LegacySheetRow {
+  recordId        String @id @map("record_id")
+  sourceFile      String @map("source_file")
+  sourceRow       Int    @map("source_row")
+  sourceSha256    String @map("source_sha256")
+  processing      String
+  invoiceRecordId String? @map("invoice_record_id")
+  invoice         LegacyInvoice? @relation(fields: [invoiceRecordId], references: [recordId], onDelete: Restrict)
+  originalData    Json   @map("original_data")
+  cleanedData     Json   @map("cleaned_data")
+
+  @@unique([sourceFile, sourceRow])
+  @@index([invoiceRecordId])
+  @@map("legacy_sheet_rows")
 }
