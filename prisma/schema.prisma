@@ -117,7 +117,9 @@ model Inquiries {
 
 model Job_Cost {
   jobCostId       String    @id
-  universalReferenceId String? @unique @map("universal_reference_id")
+  universalReferenceId String? @map("universal_reference_id")
+  sourceSheet String? @map("source_sheet")
+  sourceRow Int? @map("source_row")
   itemName        String?   @map("item_name")
   deadline        DateTime? @map("delivery_date")
   goldUsed        Decimal   @default(0.00)
@@ -145,15 +147,21 @@ model Job_Cost {
   // A sale is created when the costing is finished. The sale stores the
   // invoice number and client relation used by the UI to match name + invoice.
   sales Sales?
+  items JobCostItem[]
   inventoryMovement Inventory[] @relation("JobCostInventoryMovement")
   @@map("job_costs")
+  @@index([universalReferenceId])
 }
 
 model Sales {
   invoiceId     String      @id
-  universalReferenceId String? @unique @map("universal_reference_id")
+  universalReferenceId String? @map("universal_reference_id")
   serviceType   String
-  price         Decimal
+  price         Decimal?
+  priceConfirmed Boolean @default(true) @map("price_confirmed")
+  description String?
+  sourceSheet String? @map("source_sheet")
+  sourceRow Int? @map("source_row")
   status        SalesStatus @default(PAID)
   salesDate     DateTime    @default(now()) @map("date")
   receiptSentAt DateTime?
@@ -168,6 +176,7 @@ model Sales {
   payments SalePayment[]
 
   @@map("sales")
+  @@index([universalReferenceId])
 }
 
 model Inventory {
@@ -179,6 +188,9 @@ model Inventory {
   category    InventoryCategory @default(GOLD)
   /// Only GOLD may have a karat; NULL preserves unknown historical purity.
   goldKarat   Int? @db.SmallInt @map("gold_karat")
+  sourceSheet String? @map("source_sheet")
+  sourceRow Int? @map("source_row")
+  sourceDate String? @map("source_date")
   quantityIn  Decimal   @default(0.00)
   quantityOut Decimal   @default(0.00)
   quantityLoss Decimal  @default(0.00)
@@ -198,8 +210,44 @@ model Expenses {
   description String?
   expDate     DateTime  @default(now()) @map("date")
   deletedAt   DateTime?
+  sourceSheet String? @map("source_sheet")
+  sourceRow Int? @map("source_row")
 
   @@map("expenses")
+}
+
+model JobCostItem {
+  itemId String @id @map("item_id")
+  jobCostId String @map("job_cost_id")
+  description String?
+  linePrice Decimal? @map("line_price")
+  goldGrams Decimal? @map("gold_grams")
+  goldCost Decimal? @map("gold_cost")
+  stoneCost Decimal? @map("stone_cost")
+  laborCost Decimal? @map("labor_cost")
+  laborCharge Decimal? @map("labor_charge")
+  otherCost Decimal? @map("other_cost")
+  sourceSheet String @map("source_sheet")
+  sourceSalesRow Int @map("source_sales_row")
+  sourceCostRow Int? @map("source_cost_row")
+  createdAt DateTime @default(now()) @map("created_at")
+  job Job_Cost @relation(fields: [jobCostId], references: [jobCostId], onDelete: Cascade)
+
+  @@index([jobCostId])
+  @@map("job_cost_items")
+}
+
+model WorkbookImportIssue {
+  issueId String @id @map("issue_id")
+  sourceHash String @map("source_hash")
+  sourceSheet String @map("source_sheet")
+  sourceRow Int? @map("source_row")
+  message String
+  details Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([sourceHash])
+  @@map("workbook_import_issues")
 }
 
 model SalePayment {
@@ -210,6 +258,8 @@ model SalePayment {
   paymentNumber Int? @map("payment_number")
   method String?
   notes String?
+  sourceSheet String? @map("source_sheet")
+  sourceRow Int? @map("source_row")
 
   sale Sales @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
 

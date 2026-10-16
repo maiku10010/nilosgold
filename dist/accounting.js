@@ -10,10 +10,10 @@ function paidTotal(payments) {
 }
 function withSaleTotals(sale) {
     const payment = paidTotal(sale.payments);
-    return { ...sale, payment, outstanding: Math.max(0, Number(sale.price) - payment) };
+    return { ...sale, payment, outstanding: sale.price == null ? null : Math.max(0, Number(sale.price) - payment) };
 }
 function clientBalance(sales) {
-    return sales.reduce((sum, sale) => sum + Math.max(0, Number(sale.price) - paidTotal(sale.payments)), 0);
+    return sales.reduce((sum, sale) => sum + (sale.price == null ? 0 : Math.max(0, Number(sale.price) - paidTotal(sale.payments))), 0);
 }
 async function setSalePaidTotal(tx, invoiceId, target) {
     const payments = await tx.salePayment.findMany({ where: { invoiceId }, orderBy: [{ paidAt: 'desc' }, { paymentNumber: 'desc' }] });

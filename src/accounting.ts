@@ -5,13 +5,13 @@ export function paidTotal(payments: Array<{ amount: Prisma.Decimal | number }>):
   return payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
 }
 
-export function withSaleTotals<T extends { price: Prisma.Decimal | number; payments: Array<{ amount: Prisma.Decimal | number }> }>(sale: T) {
+export function withSaleTotals<T extends { price: Prisma.Decimal | number | null; payments: Array<{ amount: Prisma.Decimal | number }> }>(sale: T) {
   const payment = paidTotal(sale.payments);
-  return { ...sale, payment, outstanding: Math.max(0, Number(sale.price) - payment) };
+  return { ...sale, payment, outstanding: sale.price == null ? null : Math.max(0, Number(sale.price) - payment) };
 }
 
-export function clientBalance(sales: Array<{ price: Prisma.Decimal | number; payments: Array<{ amount: Prisma.Decimal | number }> }>): number {
-  return sales.reduce((sum, sale) => sum + Math.max(0, Number(sale.price) - paidTotal(sale.payments)), 0);
+export function clientBalance(sales: Array<{ price: Prisma.Decimal | number | null; payments: Array<{ amount: Prisma.Decimal | number }> }>): number {
+  return sales.reduce((sum, sale) => sum + (sale.price == null ? 0 : Math.max(0, Number(sale.price) - paidTotal(sale.payments))), 0);
 }
 
 export async function setSalePaidTotal(tx: Prisma.TransactionClient, invoiceId: string, target: number): Promise<void> {
