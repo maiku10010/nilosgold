@@ -11,8 +11,8 @@ const unitsByCategory: Record<string, string[]> = {
   GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'],
   BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'],
 };
-type Movement = { category: typeof categories[number]; itemName: string; unit: string; quantityIn: number; quantityOut: number; quantityLoss: number; unitPrice: number; date?: Date };
-function parseMovement(body: any, existing?: { category: string; itemName: string; unit: string }): Movement | string {
+type Movement = { category: typeof categories[number]; itemName: string; unit: string; goldKarat: number | null; quantityIn: number; quantityOut: number; quantityLoss: number; unitPrice: number; date?: Date };
+function parseMovement(body: any, existing?: { category: string; itemName: string; unit: string; goldKarat?: number | null }): Movement | string {
   const category = String(body.category ?? existing?.category ?? 'GOLD').trim().toUpperCase();
   const itemName = String(body.itemName ?? existing?.itemName ?? '').trim();
   const unit = String(body.unit ?? existing?.unit ?? (category === 'GEMSTONES' ? 'carats' : category === 'BOXES' ? 'boxes' : category === 'TOOLS' || category === 'PACKAGING' || category === 'FINDINGS' ? 'pieces' : 'grams'));
@@ -20,13 +20,17 @@ function parseMovement(body: any, existing?: { category: string; itemName: strin
   const quantityOut = body.quantityOut ?? body.goldOut ?? 0;
   const quantityLoss = body.quantityLoss ?? body.scraps ?? body.scrap ?? 0;
   const unitPrice = body.unitPrice ?? 0;
+  const goldKarat = body.goldKarat === undefined ? (existing?.goldKarat ?? null) : body.goldKarat === null || body.goldKarat === '' ? null : Number(body.goldKarat);
   if (!categories.includes(category as typeof categories[number])) return 'Choose a supported inventory category.';
   if (!unitsByCategory[category]?.includes(unit)) return `Choose a supported unit for ${category.toLowerCase()}.`;
   if (!itemName) return 'Enter an item description.';
   if (![quantityIn, quantityOut, quantityLoss].every(isNonNegativeNumber) || Number(quantityIn) + Number(quantityOut) + Number(quantityLoss) <= 0) return 'Enter a positive quantity for at least one movement.';
   if (!isPositiveNumber(unitPrice)) return 'Unit price must be greater than zero.';
+  if (category === 'GOLD' && goldKarat === null && !existing) return 'Choose a gold karat from 10K to 24K.';
+  if (category === 'GOLD' && goldKarat !== null && (!Number.isInteger(goldKarat) || goldKarat < 10 || goldKarat > 24)) return 'Gold karat must be a whole number from 10K to 24K.';
+  if (category !== 'GOLD' && goldKarat !== null) return 'Karat can only be set for gold inventory.';
   if (body.date !== undefined && !isValidNonFutureDate(body.date)) return 'Inventory date must be a valid date no later than today.';
-  return { category: category as Movement['category'], itemName, unit, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
+  return { category: category as Movement['category'], itemName, unit, goldKarat: category === 'GOLD' ? goldKarat : null, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
 }
 
 router.post('/', async (req: Request, res: Response) => {
@@ -35,7 +39,7 @@ router.post('/', async (req: Request, res: Response) => {
     if (typeof parsed === 'string') return res.status(400).json({ error: parsed });
     const saved = await prisma.$transaction(async tx => {
       const created = await tx.inventory.create({ data: {
-        referenceId: friendlyId(), universalReferenceId: friendlyId(), itemName: parsed.itemName, unit: parsed.unit, category: parsed.category,
+        referenceId: friendlyId(), universalReferenceId: friendlyId(), itemName: parsed.itemName, unit: parsed.unit, category: parsed.category, goldKarat: parsed.goldKarat,
         quantityIn: parsed.quantityIn, quantityOut: parsed.quantityOut, quantityLoss: parsed.quantityLoss,
         unitPrice: parsed.unitPrice,
         updatedAt: parsed.date ?? new Date(),
@@ -74,7 +78,7 @@ router.put('/:referenceId', async (req: Request, res: Response) => {
     if (typeof parsed === 'string') return res.status(400).json({ error: parsed });
     const saved = await prisma.$transaction(async tx => {
       await tx.inventory.update({ where: { referenceId: targetId }, data: {
-        itemName: parsed.itemName, unit: parsed.unit, category: parsed.category,
+        itemName: parsed.itemName, unit: parsed.unit, category: parsed.category, goldKarat: parsed.goldKarat,
         quantityIn: parsed.quantityIn, quantityOut: parsed.quantityOut, quantityLoss: parsed.quantityLoss,
         unitPrice: parsed.unitPrice,
         updatedAt: parsed.date ?? new Date(),

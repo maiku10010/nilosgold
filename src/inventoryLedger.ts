@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 type InventoryMovement = {
   referenceId: string;
   category: string;
+  goldKarat?: number | null;
   itemName: string;
   unit: string;
   quantityIn: number | Prisma.Decimal;
@@ -11,7 +12,7 @@ type InventoryMovement = {
 };
 
 const movementKey = (row: InventoryMovement) => row.category === 'GOLD'
-  ? 'GOLD:grams'
+  ? `GOLD:${row.goldKarat ?? 'unknown'}:grams`
   : `${row.category}:${row.unit}:${row.itemName.trim().toLowerCase()}`;
 const movementFactor = (row: InventoryMovement) => row.category === 'GOLD' && row.unit === 'troy oz' ? 31.1034768 : 1;
 
@@ -25,7 +26,8 @@ export function calculateInventoryBalances(rows: InventoryMovement[]): Map<strin
   for (const [key, total] of totals) {
     if (total < -0.000001) {
       const row = rows.find(candidate => movementKey(candidate) === key)!;
-      throw Object.assign(new Error(`Insufficient ${row.category.toLowerCase()} stock for ${row.itemName} (${row.unit}).`), { statusCode: 409 });
+      const product = row.category === 'GOLD' && row.goldKarat ? `${row.goldKarat}K gold` : `${row.category.toLowerCase()} stock for ${row.itemName}`;
+      throw Object.assign(new Error(`Insufficient ${product} (${row.unit}).`), { statusCode: 409 });
     }
   }
 

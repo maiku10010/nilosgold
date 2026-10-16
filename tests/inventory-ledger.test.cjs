@@ -32,6 +32,23 @@ test('gold stock is pooled across grams and troy ounces', () => {
   assert.ok(Math.abs(balances.get('usage') - 0.1034768) < 0.000001);
 });
 
+test('gold balances and shortages are separated by karat', () => {
+  const balances = calculateInventoryBalances([
+    movement('10k-stock', { goldKarat: 10, quantityIn: 5 }),
+    movement('18k-stock', { goldKarat: 18, quantityIn: 8 }),
+    movement('10k-usage', { goldKarat: 10, quantityOut: 3 }),
+  ]);
+  assert.equal(balances.get('10k-usage'), 2);
+  assert.equal(balances.get('18k-stock'), 8);
+  assert.throws(
+    () => calculateInventoryBalances([
+      movement('10k-stock', { goldKarat: 10, quantityIn: 5 }),
+      movement('18k-usage', { goldKarat: 18, quantityOut: 1 }),
+    ]),
+    /Insufficient 18K gold/,
+  );
+});
+
 test('deadlines must be real Manila calendar dates that are not in the past', () => {
   const now = new Date('2026-10-14T00:30:00Z');
   assert.equal(isTodayOrFutureDate('2026-10-14', now), true);

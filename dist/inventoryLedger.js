@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.calculateInventoryBalances = calculateInventoryBalances;
 exports.validateInventoryLedger = validateInventoryLedger;
 const movementKey = (row) => row.category === 'GOLD'
-    ? 'GOLD:grams'
+    ? `GOLD:${row.goldKarat ?? 'unknown'}:grams`
     : `${row.category}:${row.unit}:${row.itemName.trim().toLowerCase()}`;
 const movementFactor = (row) => row.category === 'GOLD' && row.unit === 'troy oz' ? 31.1034768 : 1;
 function calculateInventoryBalances(rows) {
@@ -16,7 +16,8 @@ function calculateInventoryBalances(rows) {
     for (const [key, total] of totals) {
         if (total < -0.000001) {
             const row = rows.find(candidate => movementKey(candidate) === key);
-            throw Object.assign(new Error(`Insufficient ${row.category.toLowerCase()} stock for ${row.itemName} (${row.unit}).`), { statusCode: 409 });
+            const product = row.category === 'GOLD' && row.goldKarat ? `${row.goldKarat}K gold` : `${row.category.toLowerCase()} stock for ${row.itemName}`;
+            throw Object.assign(new Error(`Insufficient ${product} (${row.unit}).`), { statusCode: 409 });
         }
     }
     const running = new Map();
