@@ -1,3 +1,4 @@
+import { roundTwo } from '../rounding';
 import { Request, Response, Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
@@ -23,14 +24,14 @@ router.post('/', async (req: Request, res: Response) => {
     const requestedDeadline = deadline ?? deliveryDate;
     if (itemName !== undefined && itemName !== null && (typeof itemName !== 'string' || itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
     if (requestedDeadline !== undefined && requestedDeadline !== null && !isTodayOrFutureDate(requestedDeadline)) return res.status(400).json({ error: 'Delivery date must be today or later.' });
-    const goldUsed = Number(req.body.goldUsed);
-    const goldScrap = Number(req.body.goldScrap ?? 0);
-    const goldCostPerG = Number(Number(req.body.goldCostPerG).toFixed(2));
-    const stoneCost = Number(req.body.stoneCost ?? 0);
-    const laborCost = Number(req.body.laborCost);
-    const laborCharge = Number(req.body.laborCharge ?? 0);
-    const otherCost = Number(req.body.otherCost ?? 0);
-    const sellingPrice = Number(req.body.sellingPrice);
+    const goldUsed = roundTwo(req.body.goldUsed);
+    const goldScrap = roundTwo(req.body.goldScrap ?? 0);
+    const goldCostPerG = roundTwo(req.body.goldCostPerG);
+    const stoneCost = roundTwo(req.body.stoneCost ?? 0);
+    const laborCost = roundTwo(req.body.laborCost);
+    const laborCharge = roundTwo(req.body.laborCharge ?? 0);
+    const otherCost = roundTwo(req.body.otherCost ?? 0);
+    const sellingPrice = roundTwo(req.body.sellingPrice);
 
     if (typeof inquiryId !== 'string' || !inquiryId || typeof clientName !== 'string' || !clientName.trim()) {
       return res.status(400).json({ error: 'Choose a pending inquiry and confirm the client name.' });
@@ -85,7 +86,7 @@ router.post('/', async (req: Request, res: Response) => {
           ...(requestedDeadline ? { deadline: new Date(`${requestedDeadline}T00:00:00Z`) } : {}),
           goldUsed,
           goldScrap,
-          goldCostPerG: Number(Number(goldCostPerG).toFixed(2)),
+          goldCostPerG,
           stoneCost,
           laborCost,
           laborCharge,
@@ -186,14 +187,14 @@ router.post('/:jobCostId/ready', async (req: Request, res: Response) => {
 router.put('/:jobCostId', async (req: Request, res: Response) => {
   try {
     const jobCostId = Array.isArray(req.params.jobCostId) ? req.params.jobCostId[0] : req.params.jobCostId;
-    const goldUsed = Number(req.body.goldUsed);
-    const goldScrap = Number(req.body.goldScrap ?? 0);
-    const goldCostPerG = Number(Number(req.body.goldCostPerG).toFixed(2));
-    const stoneCost = Number(req.body.stoneCost ?? 0);
-    const laborCost = Number(req.body.laborCost);
-    const laborCharge = Number(req.body.laborCharge ?? 0);
-    const otherCost = Number(req.body.otherCost ?? 0);
-    const sellingPrice = Number(req.body.sellingPrice);
+    const goldUsed = roundTwo(req.body.goldUsed);
+    const goldScrap = roundTwo(req.body.goldScrap ?? 0);
+    const goldCostPerG = roundTwo(req.body.goldCostPerG);
+    const stoneCost = roundTwo(req.body.stoneCost ?? 0);
+    const laborCost = roundTwo(req.body.laborCost);
+    const laborCharge = roundTwo(req.body.laborCharge ?? 0);
+    const otherCost = roundTwo(req.body.otherCost ?? 0);
+    const sellingPrice = roundTwo(req.body.sellingPrice);
     const requestedDeadline = req.body.deadline ?? req.body.deliveryDate;
     if (req.body.itemName !== undefined && req.body.itemName !== null && (typeof req.body.itemName !== 'string' || req.body.itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
     if (requestedDeadline !== undefined && requestedDeadline !== null && requestedDeadline !== '' && !isTodayOrFutureDate(requestedDeadline)) return res.status(400).json({ error: 'Delivery date must be today or later.' });

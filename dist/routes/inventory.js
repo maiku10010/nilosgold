@@ -28,8 +28,8 @@ function parseMovement(body, existing) {
         return 'Enter an item description.';
     if (![quantityIn, quantityOut, quantityLoss].every(validation_1.isNonNegativeNumber) || Number(quantityIn) + Number(quantityOut) + Number(quantityLoss) <= 0)
         return 'Enter a positive quantity for at least one movement.';
-    if (!(0, validation_1.isNonNegativeNumber)(unitPrice))
-        return 'Enter a valid non-negative unit price.';
+    if (!(0, validation_1.isPositiveNumber)(unitPrice))
+        return 'Unit price must be greater than zero.';
     if (body.date !== undefined && !(0, validation_1.isValidNonFutureDate)(body.date))
         return 'Inventory date must be a valid date no later than today.';
     return { category: category, itemName, unit, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };

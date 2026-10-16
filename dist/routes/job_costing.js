@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const rounding_1 = require("../rounding");
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const db_1 = require("../db");
@@ -25,14 +26,14 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
         if (requestedDeadline !== undefined && requestedDeadline !== null && !(0, validation_1.isTodayOrFutureDate)(requestedDeadline))
             return res.status(400).json({ error: 'Delivery date must be today or later.' });
-        const goldUsed = Number(req.body.goldUsed);
-        const goldScrap = Number(req.body.goldScrap ?? 0);
-        const goldCostPerG = Number(Number(req.body.goldCostPerG).toFixed(2));
-        const stoneCost = Number(req.body.stoneCost ?? 0);
-        const laborCost = Number(req.body.laborCost);
-        const laborCharge = Number(req.body.laborCharge ?? 0);
-        const otherCost = Number(req.body.otherCost ?? 0);
-        const sellingPrice = Number(req.body.sellingPrice);
+        const goldUsed = (0, rounding_1.roundTwo)(req.body.goldUsed);
+        const goldScrap = (0, rounding_1.roundTwo)(req.body.goldScrap ?? 0);
+        const goldCostPerG = (0, rounding_1.roundTwo)(req.body.goldCostPerG);
+        const stoneCost = (0, rounding_1.roundTwo)(req.body.stoneCost ?? 0);
+        const laborCost = (0, rounding_1.roundTwo)(req.body.laborCost);
+        const laborCharge = (0, rounding_1.roundTwo)(req.body.laborCharge ?? 0);
+        const otherCost = (0, rounding_1.roundTwo)(req.body.otherCost ?? 0);
+        const sellingPrice = (0, rounding_1.roundTwo)(req.body.sellingPrice);
         if (typeof inquiryId !== 'string' || !inquiryId || typeof clientName !== 'string' || !clientName.trim()) {
             return res.status(400).json({ error: 'Choose a pending inquiry and confirm the client name.' });
         }
@@ -87,7 +88,7 @@ router.post('/', async (req, res) => {
                     ...(requestedDeadline ? { deadline: new Date(`${requestedDeadline}T00:00:00Z`) } : {}),
                     goldUsed,
                     goldScrap,
-                    goldCostPerG: Number(Number(goldCostPerG).toFixed(2)),
+                    goldCostPerG,
                     stoneCost,
                     laborCost,
                     laborCharge,
@@ -198,14 +199,14 @@ router.post('/:jobCostId/ready', async (req, res) => {
 router.put('/:jobCostId', async (req, res) => {
     try {
         const jobCostId = Array.isArray(req.params.jobCostId) ? req.params.jobCostId[0] : req.params.jobCostId;
-        const goldUsed = Number(req.body.goldUsed);
-        const goldScrap = Number(req.body.goldScrap ?? 0);
-        const goldCostPerG = Number(Number(req.body.goldCostPerG).toFixed(2));
-        const stoneCost = Number(req.body.stoneCost ?? 0);
-        const laborCost = Number(req.body.laborCost);
-        const laborCharge = Number(req.body.laborCharge ?? 0);
-        const otherCost = Number(req.body.otherCost ?? 0);
-        const sellingPrice = Number(req.body.sellingPrice);
+        const goldUsed = (0, rounding_1.roundTwo)(req.body.goldUsed);
+        const goldScrap = (0, rounding_1.roundTwo)(req.body.goldScrap ?? 0);
+        const goldCostPerG = (0, rounding_1.roundTwo)(req.body.goldCostPerG);
+        const stoneCost = (0, rounding_1.roundTwo)(req.body.stoneCost ?? 0);
+        const laborCost = (0, rounding_1.roundTwo)(req.body.laborCost);
+        const laborCharge = (0, rounding_1.roundTwo)(req.body.laborCharge ?? 0);
+        const otherCost = (0, rounding_1.roundTwo)(req.body.otherCost ?? 0);
+        const sellingPrice = (0, rounding_1.roundTwo)(req.body.sellingPrice);
         const requestedDeadline = req.body.deadline ?? req.body.deliveryDate;
         if (req.body.itemName !== undefined && req.body.itemName !== null && (typeof req.body.itemName !== 'string' || req.body.itemName.trim().length > 120))
             return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });

@@ -1,3 +1,4 @@
+import { roundTwo } from './rounding';
 import { NextFunction, Request, Response, Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from './db';
@@ -48,7 +49,7 @@ async function findCurrent(entity: Entity, id: string): Promise<any> {
 }
 
 const numericFields = new Set(['price', 'payment', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'quantityIn', 'quantityOut', 'quantityLoss', 'unitPrice']);
-const positiveFields = new Set(['price', 'goldCostPerG', 'sellingPrice', 'amount']);
+const positiveFields = new Set(['price', 'goldCostPerG', 'sellingPrice', 'amount', 'unitPrice']);
 const nullableStringFields = new Set(['contactInfo', 'email', 'details', 'description', 'contactNum']);
 function normalizedChanges(body: Record<string, unknown>, spec: Spec): Record<string, unknown> {
   const changes: Record<string, unknown> = {};
@@ -59,7 +60,7 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec): Record<st
     }
     if (raw === undefined) continue;
     if (numericFields.has(key)) {
-      const value = Number(raw);
+      const value = spec.entity === 'JOB_COST' ? roundTwo(raw) : Number(raw);
       if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0)) throw new Error(`Enter a valid ${key}.`);
       changes[key] = value;
     } else if (key === 'isFullyPaid' && typeof raw === 'boolean') {
@@ -202,6 +203,8 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
     case 'INVENTORY': {
       const current = await tx.inventory.findUnique({ where: { referenceId: id } });
       if (!current) throw new Error('Inventory entry is no longer active.');
+      const unitPrice = Number(changes.unitPrice ?? current.unitPrice);
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new Error('Unit price must be greater than zero.');
       const category = String(changes.category ?? current.category) as InventoryCategory;
       const quantityIn = Number(changes.quantityIn ?? changes.goldIn ?? current.quantityIn);
       const quantityOut = Number(changes.quantityOut ?? changes.goldOut ?? current.quantityOut);

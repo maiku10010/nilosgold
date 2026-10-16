@@ -1,7 +1,7 @@
 import { Request, Response, Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
-import { isNonNegativeNumber, isValidNonFutureDate } from '../validation';
+import { isNonNegativeNumber, isPositiveNumber, isValidNonFutureDate } from '../validation';
 import { friendlyId } from '../friendlyId';
 import { calculateInventoryBalances, validateInventoryLedger } from '../inventoryLedger';
 
@@ -24,7 +24,7 @@ function parseMovement(body: any, existing?: { category: string; itemName: strin
   if (!unitsByCategory[category]?.includes(unit)) return `Choose a supported unit for ${category.toLowerCase()}.`;
   if (!itemName) return 'Enter an item description.';
   if (![quantityIn, quantityOut, quantityLoss].every(isNonNegativeNumber) || Number(quantityIn) + Number(quantityOut) + Number(quantityLoss) <= 0) return 'Enter a positive quantity for at least one movement.';
-  if (!isNonNegativeNumber(unitPrice)) return 'Enter a valid non-negative unit price.';
+  if (!isPositiveNumber(unitPrice)) return 'Unit price must be greater than zero.';
   if (body.date !== undefined && !isValidNonFutureDate(body.date)) return 'Inventory date must be a valid date no later than today.';
   return { category: category as Movement['category'], itemName, unit, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
 }
