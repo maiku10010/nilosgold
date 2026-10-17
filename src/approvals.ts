@@ -1,3 +1,4 @@
+import { parseStoneCost } from './lib/jobCostingSchema';
 import { serviceRules, validateServiceFields, stripDisallowedFields, ServiceType } from './lib/serviceRules';
 import { roundTwo } from './rounding';
 import { NextFunction, Request, Response, Router } from 'express';
@@ -67,6 +68,7 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec, serviceTyp
       continue;
     }
     if (raw === undefined) continue;
+    if (spec.entity === 'JOB_COST' && key === 'stoneCost') { changes[key] = parseStoneCost(raw); continue; }
     if (raw === null && Object.hasOwn(notApplicable, key)) { changes[key] = null; continue; }
     if (spec.entity === 'JOB_COST' && ['goldUsed', 'goldScrap'].includes(key)) {
       changes[key] = goldWeight(raw).toString();
@@ -188,7 +190,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
         ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed === null ? null : goldWeight(jobFields.goldUsed) } : {}),
         ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap === null ? null : goldWeight(jobFields.goldScrap) } : {}),
         ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: jobFields.goldCostPerG === null ? null : Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
-        ...(jobFields.stoneCost !== undefined ? { stoneCost: jobFields.stoneCost as number | null } : {}),
+        ...(jobFields.stoneCost !== undefined ? { stoneCost: parseStoneCost(jobFields.stoneCost) } : {}),
         ...(jobFields.laborCost !== undefined ? { laborCost: jobFields.laborCost as number | null } : {}),
         ...(jobFields.laborCharge !== undefined ? { laborCharge: jobFields.laborCharge as number | null } : {}),
         ...(jobFields.otherCost !== undefined ? { otherCost: jobFields.otherCost as number } : {}),

@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const jobCostingSchema_1 = require("../lib/jobCostingSchema");
 const serviceRules_1 = require("../lib/serviceRules");
 const rounding_1 = require("../rounding");
 const express_1 = require("express");
@@ -32,7 +33,7 @@ router.post('/', async (req, res) => {
         const goldUsed = (0, goldAllocation_1.goldWeight)(payload.goldUsed);
         const goldScrap = (0, goldAllocation_1.goldWeight)(payload.goldScrap ?? 0);
         const goldCostPerG = (0, rounding_1.roundTwo)(payload.goldCostPerG ?? 0);
-        const stoneCost = (0, rounding_1.roundTwo)(payload.stoneCost ?? 0);
+        const stoneCost = (0, jobCostingSchema_1.parseStoneCost)(payload.stoneCost);
         const laborCost = (0, rounding_1.roundTwo)(payload.laborCost);
         const laborCharge = (0, rounding_1.roundTwo)(payload.laborCharge ?? 0);
         const otherCost = (0, rounding_1.roundTwo)(payload.otherCost ?? 0);
@@ -40,7 +41,7 @@ router.post('/', async (req, res) => {
         if (typeof inquiryId !== 'string' || !inquiryId || typeof clientName !== 'string' || !clientName.trim()) {
             return res.status(400).json({ error: 'Choose a pending inquiry and confirm the client name.' });
         }
-        if (![stoneCost, laborCost, laborCharge, otherCost].every(validation_1.isNonNegativeNumber) || (rules.gold && !(0, validation_1.isPositiveNumber)(goldCostPerG)) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
+        if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(validation_1.isNonNegativeNumber) || (rules.gold && !(0, validation_1.isPositiveNumber)(goldCostPerG)) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
             return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
         }
         const jobCost = await db_1.prisma.$transaction(async (tx) => {
@@ -215,12 +216,12 @@ router.put('/:jobCostId', async (req, res) => {
             const goldUsed = (0, goldAllocation_1.goldWeight)(payload.goldUsed);
             const goldScrap = (0, goldAllocation_1.goldWeight)(payload.goldScrap ?? 0);
             const goldCostPerG = (0, rounding_1.roundTwo)(payload.goldCostPerG ?? 0);
-            const stoneCost = (0, rounding_1.roundTwo)(payload.stoneCost ?? 0);
+            const stoneCost = (0, jobCostingSchema_1.parseStoneCost)(payload.stoneCost);
             const laborCost = (0, rounding_1.roundTwo)(payload.laborCost);
             const laborCharge = (0, rounding_1.roundTwo)(payload.laborCharge ?? 0);
             const otherCost = (0, rounding_1.roundTwo)(payload.otherCost ?? 0);
             const sellingPrice = (0, rounding_1.roundTwo)(payload.sellingPrice);
-            if (![stoneCost, laborCost, laborCharge, otherCost].every(validation_1.isNonNegativeNumber) || !(0, validation_1.isNonNegativeNumber)(goldCostPerG) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
+            if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(validation_1.isNonNegativeNumber) || !(0, validation_1.isNonNegativeNumber)(goldCostPerG) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
                 throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
             }
             if (rules.gold && !(0, validation_1.isPositiveNumber)(goldCostPerG))

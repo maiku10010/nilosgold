@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.queueStaffChanges = queueStaffChanges;
+const jobCostingSchema_1 = require("./lib/jobCostingSchema");
 const serviceRules_1 = require("./lib/serviceRules");
 const rounding_1 = require("./rounding");
 const express_1 = require("express");
@@ -64,6 +65,10 @@ function normalizedChanges(body, spec, serviceType) {
         }
         if (raw === undefined)
             continue;
+        if (spec.entity === 'JOB_COST' && key === 'stoneCost') {
+            changes[key] = (0, jobCostingSchema_1.parseStoneCost)(raw);
+            continue;
+        }
         if (raw === null && Object.hasOwn(notApplicable, key)) {
             changes[key] = null;
             continue;
@@ -243,7 +248,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                     ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed === null ? null : (0, goldAllocation_1.goldWeight)(jobFields.goldUsed) } : {}),
                     ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap === null ? null : (0, goldAllocation_1.goldWeight)(jobFields.goldScrap) } : {}),
                     ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: jobFields.goldCostPerG === null ? null : Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
-                    ...(jobFields.stoneCost !== undefined ? { stoneCost: jobFields.stoneCost } : {}),
+                    ...(jobFields.stoneCost !== undefined ? { stoneCost: (0, jobCostingSchema_1.parseStoneCost)(jobFields.stoneCost) } : {}),
                     ...(jobFields.laborCost !== undefined ? { laborCost: jobFields.laborCost } : {}),
                     ...(jobFields.laborCharge !== undefined ? { laborCharge: jobFields.laborCharge } : {}),
                     ...(jobFields.otherCost !== undefined ? { otherCost: jobFields.otherCost } : {}),

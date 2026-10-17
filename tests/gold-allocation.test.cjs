@@ -338,3 +338,75 @@ test('Cleaning staff edits retain nulls through approval and undo and reject for
   assert.equal(tx.job.laborCost, 1000);
   for (const key of ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost']) assert.equal(tx.job[key], null);
 });
+
+
+test('Repair and Custom creates preserve omitted/null stone costs and explicitly entered zero', async () => {
+  const router = require('../dist/routes/job_costing').default;
+  const create = router.stack.find(layer => layer.route?.path === '/' && layer.route?.methods.post).route.stack[0].handle;
+  for (const type of ['Repair', 'Custom']) {
+    for (const stoneCost of [undefined, null, 0, 500]) {
+      const tx = database([source()]); Object.assign(prisma, tx);
+      prisma.$transaction = async fn => fn(prisma);
+      prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', customerName: 'Mia', status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
+      prisma.employee = { findFirst: async () => ({ empId: 'E' }) };
+      prisma.job_Cost.create = async ({ data }) => Object.assign(tx.job, data);
+      prisma.job_Cost.findUniqueOrThrow = async () => tx.job;
+      prisma.sales = { create: async ({ data }) => data };
+      const result = response(); result.locals = {};
+      await create({ body: { inquiryId: 'INQ-1', clientName: 'Mia', serviceType: type, goldSourceId: '18K-IN', goldUsed: '.5', goldScrap: 0, goldCostPerG: 8000, laborCost: 1000, sellingPrice: 15000, ...(stoneCost === undefined ? {} : { stoneCost }) } }, result);
+      assert.equal(result.statusCode, 201);
+      assert.equal(result.body.stoneCost, stoneCost ?? null);
+    }
+  }
+});
+
+test('Repair edits can clear a previous stone cost and reject invalid values with 400', async () => {
+  const tx = database([source()]); tx.job.stoneCost = 500;
+  tx.job.sales.client = { clientName: 'Mia' };
+  Object.assign(prisma, tx);
+  prisma.$transaction = async fn => fn(prisma);
+  prisma.job_Cost.findUniqueOrThrow = async () => tx.job;
+  prisma.sales = { update: async () => ({}) };
+  const router = require('../dist/routes/job_costing').default;
+  const edit = router.stack.find(layer => layer.route?.methods.put).route.stack[0].handle;
+  const base = { invoiceId: 'INV-1', clientName: 'Mia', goldSourceId: '18K-IN', goldUsed: '.5', goldScrap: 0, goldCostPerG: 8000, laborCost: 1000, sellingPrice: 15000 };
+  for (const stoneCost of [-1, -0.001, 'bad', false]) {
+    const invalid = response();
+    await edit({ params: { jobCostId: 'JOB-1' }, body: { ...base, stoneCost } }, invalid);
+    assert.equal(invalid.statusCode, 400);
+    assert.equal(invalid.body.field, 'stoneCost');
+    assert.equal(tx.job.stoneCost, 500);
+  }
+  const cleared = response();
+  await edit({ params: { jobCostId: 'JOB-1' }, body: { ...base, stoneCost: null } }, cleared);
+  assert.equal(cleared.statusCode, 200);
+  assert.equal(cleared.body.stoneCost, null);
+});
+
+test('Repair staff can request clearing stone cost and approval undo restores its previous amount', async () => {
+  const tx = database([source()]); tx.job.stoneCost = 500; tx.job.inventoryMovement = [];
+  Object.assign(prisma, tx);
+  let queued;
+  prisma.approvalRequest = {
+    findFirst: async () => null,
+    create: async ({ data }) => (queued = { ...data, requestId: 'APP-STONE', status: 'PENDING' }),
+    findUnique: async () => queued,
+    update: async ({ data }) => (queued = { ...queued, ...data }),
+  };
+  prisma.systemLog = { create: async () => ({}) };
+  prisma.$transaction = async fn => fn(prisma);
+  const pending = response();
+  await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: { empId: 'STAFF', empRole: 'Staff' }, body: { stoneCost: null } }, pending, () => assert.fail('must queue'));
+  assert.equal(pending.statusCode, 202);
+  assert.equal(queued.proposedData.stoneCost, null);
+  assert.equal(queued.beforeData.stoneCost, 500);
+  const user = { empId: 'ADMIN', empRole: 'Admin', empName: 'Admin' };
+  const approved = response();
+  await approve({ params: { requestId: 'APP-STONE' }, body: {}, user }, approved);
+  assert.equal(approved.statusCode, 200);
+  assert.equal(tx.job.stoneCost, null);
+  const restored = response();
+  await undo({ params: { requestId: 'APP-STONE' }, user }, restored);
+  assert.equal(restored.statusCode, 200);
+  assert.equal(tx.job.stoneCost, 500);
+});

@@ -1,3 +1,4 @@
+import { parseStoneCost } from '../lib/jobCostingSchema';
 import { stripDisallowedFields, validateServiceFields, ServiceType } from '../lib/serviceRules';
 import { roundTwo } from '../rounding';
 import { Request, Response, Router } from 'express';
@@ -30,7 +31,7 @@ router.post('/', async (req: Request, res: Response) => {
     const goldUsed = goldWeight(payload.goldUsed);
     const goldScrap = goldWeight(payload.goldScrap ?? 0);
     const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);
-    const stoneCost = roundTwo(payload.stoneCost ?? 0);
+    const stoneCost = parseStoneCost(payload.stoneCost);
     const laborCost = roundTwo(payload.laborCost);
     const laborCharge = roundTwo(payload.laborCharge ?? 0);
     const otherCost = roundTwo(payload.otherCost ?? 0);
@@ -39,7 +40,7 @@ router.post('/', async (req: Request, res: Response) => {
     if (typeof inquiryId !== 'string' || !inquiryId || typeof clientName !== 'string' || !clientName.trim()) {
       return res.status(400).json({ error: 'Choose a pending inquiry and confirm the client name.' });
     }
-    if (![stoneCost, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || (rules.gold && !isPositiveNumber(goldCostPerG)) || !isPositiveNumber(sellingPrice)) {
+    if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || (rules.gold && !isPositiveNumber(goldCostPerG)) || !isPositiveNumber(sellingPrice)) {
       return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
     }
 
@@ -200,12 +201,12 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       const goldUsed = goldWeight(payload.goldUsed);
       const goldScrap = goldWeight(payload.goldScrap ?? 0);
       const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);
-      const stoneCost = roundTwo(payload.stoneCost ?? 0);
+      const stoneCost = parseStoneCost(payload.stoneCost);
       const laborCost = roundTwo(payload.laborCost);
       const laborCharge = roundTwo(payload.laborCharge ?? 0);
       const otherCost = roundTwo(payload.otherCost ?? 0);
       const sellingPrice = roundTwo(payload.sellingPrice);
-      if (![stoneCost, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || !isNonNegativeNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
+      if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || !isNonNegativeNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
         throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
       }
 
