@@ -7,6 +7,7 @@ import { isNonNegativeNumber, isPositiveNumber, isTodayOrFutureDate } from '../v
 import { readyEmail, sendSystemEmail } from '../services/email';
 import { validateInventoryLedger } from '../inventoryLedger';
 import { withSaleTotals } from '../accounting';
+import { goldWeight, syncGoldAllocation } from '../goldAllocation';
 
 const router = Router();
 const serviceTypes = ['Custom', 'Repair', 'Resize', 'Cleaning'];
@@ -24,8 +25,8 @@ router.post('/', async (req: Request, res: Response) => {
     const requestedDeadline = deadline ?? deliveryDate;
     if (itemName !== undefined && itemName !== null && (typeof itemName !== 'string' || itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
     if (requestedDeadline !== undefined && requestedDeadline !== null && !isTodayOrFutureDate(requestedDeadline)) return res.status(400).json({ error: 'Delivery date must be today or later.' });
-    const goldUsed = roundTwo(req.body.goldUsed);
-    const goldScrap = roundTwo(req.body.goldScrap ?? 0);
+    const goldUsed = goldWeight(req.body.goldUsed);
+    const goldScrap = goldWeight(req.body.goldScrap ?? 0);
     const goldCostPerG = roundTwo(req.body.goldCostPerG);
     const stoneCost = roundTwo(req.body.stoneCost ?? 0);
     const laborCost = roundTwo(req.body.laborCost);
@@ -37,7 +38,7 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Choose a pending inquiry and confirm the client name.' });
     }
     if (!serviceTypes.includes(serviceType)) return res.status(400).json({ error: 'Choose a valid service type.' });
-    if (![goldUsed, goldScrap, stoneCost, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || !isPositiveNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
+    if (![stoneCost, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || !isPositiveNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
       return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
     }
 
@@ -97,14 +98,8 @@ router.post('/', async (req: Request, res: Response) => {
           inquiry: { connect: { inquiryId } },
         },
       });
-      if (goldUsed + goldScrap > 0) {
-        await tx.inventory.create({ data: {
-          referenceId: friendlyId(), universalReferenceId: createdJob.universalReferenceId, itemName: createdJob.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD',
-          quantityOut: goldUsed, quantityLoss: goldScrap,
-          unitPrice: goldCostPerG, jobCostId: createdJob.jobCostId,
-        } });
-        await validateInventoryLedger(tx);
-      }
+      await syncGoldAllocation(tx, { goldSourceId: req.body.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId: createdJob.jobCostId, universalReferenceId: createdJob.universalReferenceId });
+      await validateInventoryLedger(tx);
       const sale = await tx.sales.create({
         data: {
           invoiceId: friendlyId(),
@@ -128,7 +123,7 @@ router.post('/', async (req: Request, res: Response) => {
     res.status(201).json(jobCost);
   } catch (error) {
     const statusCode = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 0);
-    if (statusCode) return res.status(statusCode).json({ error: (error as Error).message });
+    if (statusCode) return res.status(statusCode).json({ error: (error as Error).message, field: (error as { field?: string }).field });
     console.error('Error creating job costing:', error);
     res.status(500).json({ error: 'Job costing could not be saved.' });
   }
@@ -188,8 +183,8 @@ router.post('/:jobCostId/ready', async (req: Request, res: Response) => {
 router.put('/:jobCostId', async (req: Request, res: Response) => {
   try {
     const jobCostId = Array.isArray(req.params.jobCostId) ? req.params.jobCostId[0] : req.params.jobCostId;
-    const goldUsed = roundTwo(req.body.goldUsed);
-    const goldScrap = roundTwo(req.body.goldScrap ?? 0);
+    const goldUsed = goldWeight(req.body.goldUsed);
+    const goldScrap = goldWeight(req.body.goldScrap ?? 0);
     const goldCostPerG = roundTwo(req.body.goldCostPerG);
     const stoneCost = roundTwo(req.body.stoneCost ?? 0);
     const laborCost = roundTwo(req.body.laborCost);
@@ -199,7 +194,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
     const requestedDeadline = req.body.deadline ?? req.body.deliveryDate;
     if (req.body.itemName !== undefined && req.body.itemName !== null && (typeof req.body.itemName !== 'string' || req.body.itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
     if (requestedDeadline !== undefined && requestedDeadline !== null && requestedDeadline !== '' && !isTodayOrFutureDate(requestedDeadline)) return res.status(400).json({ error: 'Delivery date must be today or later.' });
-    if (![goldUsed, goldScrap, stoneCost, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || !isPositiveNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
+    if (![stoneCost, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || !isPositiveNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
       return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
     }
     if (typeof req.body.invoiceId !== 'string' || typeof req.body.clientName !== 'string') {
@@ -210,20 +205,8 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       const existing = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { sales: { include: { client: true } } } });
       if (!existing) throw Object.assign(new Error('Job costing record not found.'), { statusCode: 404 });
       if (!existing.sales) throw Object.assign(new Error('This costing has no linked invoice.'), { statusCode: 409 });
-      const movement = await tx.inventory.findFirst({ where: { jobCostId, category: 'GOLD' } });
-      if ((goldUsed + goldScrap > 0) || movement) {
-        if (movement) await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: {
-          itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : existing.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD', quantityIn: 0,
-          quantityOut: goldUsed, quantityLoss: goldScrap,
-          unitPrice: goldCostPerG, updatedAt: new Date(), deletedAt: goldUsed + goldScrap > 0 ? null : new Date(),
-        } });
-        else await tx.inventory.create({ data: {
-          referenceId: friendlyId(), universalReferenceId: existing.universalReferenceId, itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : existing.itemName || 'Job costing gold', unit: 'grams', category: 'GOLD',
-          quantityOut: goldUsed, quantityLoss: goldScrap,
-          unitPrice: goldCostPerG, jobCostId,
-        } });
-        await validateInventoryLedger(tx);
-      }
+      await syncGoldAllocation(tx, { goldSourceId: req.body.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId, universalReferenceId: existing.universalReferenceId });
+      await validateInventoryLedger(tx);
       const namesMatch = existing.sales.client.clientName.trim().toLocaleLowerCase() === req.body.clientName.trim().toLocaleLowerCase();
       if (existing.sales.invoiceId !== req.body.invoiceId || !namesMatch) {
         throw Object.assign(new Error('The client name and invoice number must match this costing.'), { statusCode: 409 });
@@ -254,7 +237,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
     res.json(updated);
   } catch (error) {
     const statusCode = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 0);
-    if (statusCode) return res.status(statusCode).json({ error: (error as Error).message });
+    if (statusCode) return res.status(statusCode).json({ error: (error as Error).message, field: (error as { field?: string }).field });
     console.error('Error updating job costing:', error);
     res.status(500).json({ error: 'Job costing could not be updated.' });
   }
@@ -281,7 +264,7 @@ router.delete('/:jobCostId', async (req: Request, res: Response) => {
     res.json({ message: 'Job costing and its linked invoice were removed; the inquiry is pending again.' });
   } catch (error) {
     const statusCode = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 0);
-    if (statusCode) return res.status(statusCode).json({ error: (error as Error).message });
+    if (statusCode) return res.status(statusCode).json({ error: (error as Error).message, field: (error as { field?: string }).field });
     console.error('Error deleting job costing:', error);
     res.status(500).json({ error: 'Job costing could not be deleted.' });
   }

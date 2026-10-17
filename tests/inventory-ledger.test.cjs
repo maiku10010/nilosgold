@@ -20,7 +20,7 @@ test('backdated gold usage is accepted when current pooled stock is sufficient',
 test('current aggregate stock shortages are still rejected', () => {
   assert.throws(
     () => calculateInventoryBalances([movement('stock', { quantityIn: 4 }), movement('usage', { quantityOut: 5 })]),
-    /Insufficient gold stock/,
+    /Insufficient Gold \(karat unspecified\)/,
   );
 });
 
@@ -45,7 +45,7 @@ test('gold balances and shortages are separated by karat', () => {
       movement('10k-stock', { goldKarat: 10, quantityIn: 5 }),
       movement('18k-usage', { goldKarat: 18, quantityOut: 1 }),
     ]),
-    /Insufficient 18K gold/,
+    /Insufficient Gold · 18K/,
   );
 });
 
@@ -55,4 +55,16 @@ test('deadlines must be real Manila calendar dates that are not in the past', ()
   assert.equal(isTodayOrFutureDate('2026-10-15', now), true);
   assert.equal(isTodayOrFutureDate('2026-10-13', now), false);
   assert.equal(isTodayOrFutureDate('2026-02-30', now), false);
+});
+
+test('exact stock boundary accepts 1 used plus 0.2 scrap against 1.2 available', () => {
+  const balances = calculateInventoryBalances([
+    movement('stock', { goldKarat: 18, quantityIn: 1.2 }),
+    movement('usage', { goldKarat: 18, quantityOut: 1, quantityLoss: .2 }),
+  ]);
+  assert.equal(balances.get('usage'), 0);
+  assert.throws(() => calculateInventoryBalances([
+    movement('stock', { goldKarat: 18, quantityIn: 1.2 }),
+    movement('usage', { goldKarat: 18, quantityOut: 1, quantityLoss: .201 }),
+  ]), /Insufficient Gold · 18K/);
 });

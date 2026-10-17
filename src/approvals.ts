@@ -9,6 +9,7 @@ import { friendlyId } from './friendlyId';
 import { isTodayOrFutureDate, isValidPHContact } from './validation';
 import { InventoryCategory } from '@prisma/client';
 import { paidTotal, setSalePaidTotal } from './accounting';
+import { goldWeight, syncGoldAllocation } from './goldAllocation';
 
 type Entity = 'SALE' | 'JOB_COST' | 'INQUIRY' | 'EXPENSE' | 'INVENTORY' | 'CLIENT';
 type Action = 'UPDATE' | 'DELETE';
@@ -21,8 +22,8 @@ function requestSpec(req: Request): Spec | null {
   const [resource, id] = segments;
   const resourceSpecs: Record<string, { entity: Entity; allowed: string[] }> = {
     sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'payment', 'salesDate', 'date', 'clientName', 'contactNum', 'email'] },
-    'job-cost': { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
-    job_costing: { entity: 'JOB_COST', allowed: ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
+    'job-cost': { entity: 'JOB_COST', allowed: ['goldSourceId', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
+    job_costing: { entity: 'JOB_COST', allowed: ['goldSourceId', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
     inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'isFullyPaid', 'date', 'inqDate'] },
     expenses: { entity: 'EXPENSE', allowed: ['category', 'amount', 'description', 'expDate', 'date'] },
     inventory: { entity: 'INVENTORY', allowed: ['itemName', 'category', 'quantityIn', 'quantityOut', 'quantityLoss', 'goldIn', 'goldOut', 'scraps', 'scrap', 'unit', 'unitPrice', 'date', 'updatedAt'] },
@@ -40,7 +41,12 @@ function json(value: unknown): Prisma.InputJsonValue {
 async function findCurrent(entity: Entity, id: string): Promise<any> {
   switch (entity) {
     case 'SALE': return prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true, payments: true } });
-    case 'JOB_COST': return prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } } } });
+    case 'JOB_COST': {
+      const job = await prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } }, inventoryMovement: { where: { category: 'GOLD' } } } });
+      if (!job) return null;
+      const source = await prisma.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
+      return { ...job, goldSourceId: source?.referenceId ?? null };
+    }
     case 'INQUIRY': return prisma.inquiries.findFirst({ where: { inquiryId: id, deletedAt: null }, include: { jobCost: true } });
     case 'EXPENSE': return prisma.expenses.findFirst({ where: { expenseId: id, deletedAt: null } });
     case 'INVENTORY': return prisma.inventory.findFirst({ where: { referenceId: id, deletedAt: null } });
@@ -59,6 +65,10 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec): Record<st
       continue;
     }
     if (raw === undefined) continue;
+    if (spec.entity === 'JOB_COST' && ['goldUsed', 'goldScrap'].includes(key)) {
+      changes[key] = goldWeight(raw).toString();
+      continue;
+    }
     if (numericFields.has(key)) {
       const value = spec.entity === 'JOB_COST' ? roundTwo(raw) : Number(raw);
       if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0)) throw new Error(`Enter a valid ${key}.`);
@@ -139,7 +149,7 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
   }
 }
 
-async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: Record<string, unknown>): Promise<void> {
+async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: Record<string, unknown>, goldRestoreSnapshot?: Record<string, any>): Promise<void> {
   const id = request.entityId as string;
   const date = (key: string) => changes[key] ? new Date(String(changes[key])) : undefined;
   switch (request.entityType as Entity) {
@@ -164,8 +174,8 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       if (!job) throw new Error('Job costing is no longer active.');
       const { sellingPrice, ...jobFields } = changes;
       await tx.job_Cost.update({ where: { jobCostId: id }, data: {
-        ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed as number } : {}),
-        ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap as number } : {}),
+        ...(jobFields.goldUsed !== undefined ? { goldUsed: goldWeight(jobFields.goldUsed) } : {}),
+        ...(jobFields.goldScrap !== undefined ? { goldScrap: goldWeight(jobFields.goldScrap) } : {}),
         ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
         ...(jobFields.stoneCost !== undefined ? { stoneCost: jobFields.stoneCost as number } : {}),
         ...(jobFields.laborCost !== undefined ? { laborCost: jobFields.laborCost as number } : {}),
@@ -175,12 +185,25 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
         ...(jobFields.deadline !== undefined || jobFields.deliveryDate !== undefined ? { deadline: date('deadline') ?? date('deliveryDate') } : {}),
         ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
       } });
-      const movement = await tx.inventory.findFirst({ where: { jobCostId: id, category: 'GOLD' } });
-      const goldUsed = Number(jobFields.goldUsed ?? job.goldUsed);
-      const goldScrap = Number(jobFields.goldScrap ?? job.goldScrap);
-      if (movement) await tx.inventory.update({ where: { referenceId: movement.referenceId }, data: { itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), quantityOut: goldUsed, quantityLoss: goldScrap, unitPrice: Number(Number(jobFields.goldCostPerG ?? job.goldCostPerG).toFixed(2)), deletedAt: goldUsed + goldScrap > 0 ? null : new Date() } });
-      else if (goldUsed + goldScrap > 0) await tx.inventory.create({ data: { referenceId: friendlyId(), universalReferenceId: job.universalReferenceId, jobCostId: id, itemName: String(jobFields.itemName ?? job.itemName ?? 'Job costing gold'), unit: 'grams', category: 'GOLD', quantityOut: goldUsed, quantityLoss: goldScrap, unitPrice: Number(Number(jobFields.goldCostPerG ?? job.goldCostPerG).toFixed(2)) } });
-      if (movement || goldUsed + goldScrap > 0) await validateInventoryLedger(tx);
+      if (goldRestoreSnapshot && Array.isArray(goldRestoreSnapshot.inventoryMovement)) {
+        await tx.inventory.updateMany({ where: { jobCostId: id, category: 'GOLD' }, data: { deletedAt: new Date() } });
+        for (const row of goldRestoreSnapshot.inventoryMovement) {
+          await tx.inventory.update({ where: { referenceId: row.referenceId }, data: {
+            itemName: row.itemName, goldKarat: row.goldKarat ?? null, unit: row.unit,
+            quantityIn: row.quantityIn, quantityOut: row.quantityOut, quantityLoss: row.quantityLoss, unitPrice: row.unitPrice,
+            deletedAt: row.deletedAt ? new Date(row.deletedAt) : null,
+          } });
+        }
+        await tx.job_Cost.update({ where: { jobCostId: id }, data: { goldKarat: goldRestoreSnapshot.goldKarat ?? null } });
+      } else {
+        const source = jobFields.goldSourceId ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
+        await syncGoldAllocation(tx, {
+          goldSourceId: jobFields.goldSourceId ?? source?.referenceId,
+          goldUsed: goldWeight(jobFields.goldUsed ?? job.goldUsed), goldScrap: goldWeight(jobFields.goldScrap ?? job.goldScrap),
+          goldCostPerG: Number(jobFields.goldCostPerG ?? job.goldCostPerG), jobCostId: id, universalReferenceId: job.universalReferenceId,
+        });
+      }
+      await validateInventoryLedger(tx);
       if (sellingPrice !== undefined && job.sales) await tx.sales.update({ where: { invoiceId: job.sales.invoiceId }, data: { price: sellingPrice as number } });
       return;
     }
@@ -276,7 +299,7 @@ async function undoApprovedRequest(tx: Prisma.TransactionClient, request: any): 
   if (request.action === 'UPDATE') {
     const proposed = (request.proposedData ?? {}) as Record<string, unknown>;
     const restore = Object.fromEntries(Object.keys(proposed).map(key => [key, before[key] ?? before.client?.[key]]));
-    await applyUpdate(tx, { ...request, proposedData: restore }, restore);
+    await applyUpdate(tx, { ...request, proposedData: restore }, restore, request.entityType === 'JOB_COST' ? before : undefined);
     return;
   }
   const id = request.entityId as string;
@@ -320,7 +343,7 @@ router.post('/:requestId/approve', async (req: Request, res: Response) => {
       if (approval.action === 'DELETE') await applyDelete(tx, approval);
       else await applyUpdate(tx, approval, (approval.proposedData ?? {}) as Record<string, unknown>);
       return tx.approvalRequest.update({ where: { requestId }, data: { status: 'APPROVED', reviewerEmpId: req.user!.empId, reviewerNote: note, reviewedAt: new Date() } });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     await writeSystemLog({ actorEmpId: req.user!.empId, actorName: req.user!.empName, actorRole: req.user!.empRole, action: 'APPROVAL_APPROVED', entityType: result.entityType, entityId: result.entityId, details: { requestId, originalAction: result.action, requesterEmpId: result.requesterEmpId, note } });
     res.json({ request: result, message: 'Change approved and applied.' });
   } catch (error) {
@@ -348,7 +371,7 @@ router.post('/:requestId/undo', async (req: Request, res: Response) => {
       if (Date.now() - approval.reviewedAt.getTime() > 5_000) throw Object.assign(new Error('The five-second undo window has ended.'), { statusCode: 409 });
       await undoApprovedRequest(tx, approval);
       return tx.approvalRequest.update({ where: { requestId }, data: { status: 'REJECTED', reviewerNote: 'Approval undone by reviewer.', reviewedAt: new Date() } });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     await writeSystemLog({ actorEmpId: req.user!.empId, actorName: req.user!.empName, actorRole: req.user!.empRole, action: 'APPROVAL_UNDONE', entityType: result.entityType, entityId: result.entityId, details: { requestId } });
     res.json({ request: result, message: 'Approval undone. The prior record state was restored.' });
   } catch (error) {

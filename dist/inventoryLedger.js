@@ -2,21 +2,22 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.calculateInventoryBalances = calculateInventoryBalances;
 exports.validateInventoryLedger = validateInventoryLedger;
+const client_1 = require("@prisma/client");
 const movementKey = (row) => row.category === 'GOLD'
     ? `GOLD:${row.goldKarat ?? 'unknown'}:grams`
     : `${row.category}:${row.unit}:${row.itemName.trim().toLowerCase()}`;
-const movementFactor = (row) => row.category === 'GOLD' && row.unit === 'troy oz' ? 31.1034768 : 1;
+const movementFactor = (row) => new client_1.Prisma.Decimal(row.category === 'GOLD' && row.unit === 'troy oz' ? '31.1034768' : '1');
 function calculateInventoryBalances(rows) {
     const totals = new Map();
     for (const row of rows) {
         const key = movementKey(row);
-        const change = (Number(row.quantityIn) - Number(row.quantityOut) - Number(row.quantityLoss)) * movementFactor(row);
-        totals.set(key, (totals.get(key) ?? 0) + change);
+        const change = new client_1.Prisma.Decimal(row.quantityIn).minus(row.quantityOut).minus(row.quantityLoss).times(movementFactor(row));
+        totals.set(key, (totals.get(key) ?? new client_1.Prisma.Decimal(0)).plus(change));
     }
     for (const [key, total] of totals) {
-        if (total < -0.000001) {
+        if (total.isNegative()) {
             const row = rows.find(candidate => movementKey(candidate) === key);
-            const product = row.category === 'GOLD' && row.goldKarat ? `${row.goldKarat}K gold` : `${row.category.toLowerCase()} stock for ${row.itemName}`;
+            const product = row.category === 'GOLD' ? row.goldKarat ? `Gold · ${row.goldKarat}K` : 'Gold (karat unspecified)' : row.itemName;
             throw Object.assign(new Error(`Insufficient ${product} (${row.unit}).`), { statusCode: 409 });
         }
     }
@@ -25,9 +26,9 @@ function calculateInventoryBalances(rows) {
     for (const row of rows) {
         const key = movementKey(row);
         const factor = movementFactor(row);
-        const balance = (running.get(key) ?? 0) + (Number(row.quantityIn) - Number(row.quantityOut) - Number(row.quantityLoss)) * factor;
+        const balance = (running.get(key) ?? new client_1.Prisma.Decimal(0)).plus(new client_1.Prisma.Decimal(row.quantityIn).minus(row.quantityOut).minus(row.quantityLoss).times(factor));
         running.set(key, balance);
-        result.set(row.referenceId, balance / factor);
+        result.set(row.referenceId, balance.div(factor).toNumber());
     }
     return result;
 }

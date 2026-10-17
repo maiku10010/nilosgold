@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = require("../db");
+const goldAllocation_1 = require("../goldAllocation");
 const router = (0, express_1.Router)();
 router.get('/', async (req, res) => {
     const startValue = String(req.query.start ?? '');
@@ -22,7 +23,7 @@ router.get('/', async (req, res) => {
         const jobCost = sales.reduce((sum, sale) => {
             if (!sale.job || sale.job.deletedAt)
                 return sum;
-            return sum + Number((Number(sale.job.goldUsed) * Number(sale.job.goldCostPerG)).toFixed(2)) + Number(sale.job.stoneCost) + Number(sale.job.laborCost) + Number(sale.job.otherCost);
+            return sum + (0, goldAllocation_1.goldMaterialCost)(sale.job.goldUsed, sale.job.goldScrap, sale.job.goldCostPerG).toNumber() + Number(sale.job.stoneCost) + Number(sale.job.laborCost) + Number(sale.job.otherCost);
         }, 0);
         const operatingExpenses = Number(expenses._sum.amount ?? 0);
         res.json({ start: start.toISOString(), end: end.toISOString(), revenue, jobCost, grossProfit: revenue - jobCost, expenses: operatingExpenses, netProfit: revenue - jobCost - operatingExpenses, netMargin: revenue ? ((revenue - jobCost - operatingExpenses) / revenue) * 100 : 0, inquiries, salesCount: sales.length });
