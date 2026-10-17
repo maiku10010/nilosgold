@@ -1,3 +1,4 @@
+import { goldWeight } from '../goldAllocation';
 import { Request, Response, Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
@@ -6,12 +7,16 @@ import { friendlyId } from '../friendlyId';
 import { calculateInventoryBalances, validateInventoryLedger } from '../inventoryLedger';
 
 const router = Router();
+const scrapMetadata = (row: { category: string; jobCostId: string | null; goldKarat: number | null; quantityIn: Prisma.Decimal; quantityOut: Prisma.Decimal; quantityLoss: Prisma.Decimal }) => row.category === 'SCRAP' ? {
+  jobId: row.jobCostId, sourceKarat: row.goldKarat,
+  grams: row.quantityIn.minus(row.quantityOut).minus(row.quantityLoss).toString(),
+} : {};
 const categories = ['GOLD', 'SCRAP', 'SILVER', 'GEMSTONES', 'BOXES', 'PACKAGING', 'FINDINGS', 'TOOLS'] as const;
 const unitsByCategory: Record<string, string[]> = {
   SCRAP: ['grams'], GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'],
   BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'],
 };
-type Movement = { category: typeof categories[number]; itemName: string; unit: string; goldKarat: number | null; quantityIn: number; quantityOut: number; quantityLoss: number; unitPrice: number; date?: Date };
+type Movement = { category: typeof categories[number]; itemName: string; unit: string; goldKarat: number | null; quantityIn: number | Prisma.Decimal; quantityOut: number | Prisma.Decimal; quantityLoss: number | Prisma.Decimal; unitPrice: number; date?: Date };
 function parseMovement(body: any, existing?: { category: string; itemName: string; unit: string; goldKarat?: number | null }): Movement | string {
   const category = String(body.category ?? existing?.category ?? 'GOLD').trim().toUpperCase();
   const itemName = String(body.itemName ?? existing?.itemName ?? '').trim();
@@ -30,7 +35,7 @@ function parseMovement(body: any, existing?: { category: string; itemName: strin
   if (['GOLD', 'SCRAP'].includes(category) && goldKarat !== null && (!Number.isInteger(goldKarat) || goldKarat < 10 || goldKarat > 24)) return 'Gold karat must be a whole number from 10K to 24K.';
   if (!['GOLD', 'SCRAP'].includes(category) && goldKarat !== null) return 'Karat can only be set for gold or scrap inventory.';
   if (body.date !== undefined && !isValidNonFutureDate(body.date)) return 'Inventory date must be a valid date no later than today.';
-  return { category: category as Movement['category'], itemName, unit, goldKarat: ['GOLD', 'SCRAP'].includes(category) ? goldKarat : null, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
+  return { category: category as Movement['category'], itemName, unit, goldKarat: ['GOLD', 'SCRAP'].includes(category) ? goldKarat : null, quantityIn: category === 'SCRAP' ? goldWeight(quantityIn) : Number(quantityIn), quantityOut: category === 'SCRAP' ? goldWeight(quantityOut) : Number(quantityOut), quantityLoss: category === 'SCRAP' ? goldWeight(quantityLoss) : Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
 }
 
 router.post('/', async (req: Request, res: Response) => {
@@ -49,7 +54,7 @@ router.post('/', async (req: Request, res: Response) => {
       const balances = calculateInventoryBalances(rows);
       const saved = rows.find(row => row.referenceId === created.referenceId)!;
       const balance = balances.get(created.referenceId) ?? 0;
-      return { ...saved, balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
+      return { ...saved, ...scrapMetadata(saved), balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     res.locals.auditRecordId = saved.referenceId;
     res.status(201).json(saved);
@@ -66,7 +71,7 @@ router.get('/', async (req: Request, res: Response) => {
     if (category && !categories.includes(category as typeof categories[number])) return res.status(400).json({ error: 'Choose a supported inventory category.' });
     const rows = await prisma.inventory.findMany({ where: { deletedAt: null, ...(category ? { category } : {}) }, orderBy: [{ updatedAt: 'asc' }, { referenceId: 'asc' }] });
     const balances = calculateInventoryBalances(rows);
-    res.json(rows.map(row => ({ ...row, balance: balances.get(row.referenceId) ?? 0, totalGold: row.category === 'GOLD' ? balances.get(row.referenceId) ?? 0 : 0 })));
+    res.json(rows.map(row => ({ ...row, ...scrapMetadata(row), balance: balances.get(row.referenceId) ?? 0, totalGold: row.category === 'GOLD' ? balances.get(row.referenceId) ?? 0 : 0 })));
   } catch (error) { console.error('Error fetching inventory items:', error); res.status(500).json({ error: 'Inventory could not be loaded.' }); }
 });
 
@@ -90,7 +95,7 @@ router.put('/:referenceId', async (req: Request, res: Response) => {
       const balances = calculateInventoryBalances(rows);
       const saved = rows.find(row => row.referenceId === targetId)!;
       const balance = balances.get(targetId) ?? 0;
-      return { ...saved, balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
+      return { ...saved, ...scrapMetadata(saved), balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     res.json(saved);
   } catch (error) { console.error('Error updating inventory item:', error); const status = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 400); res.status(status).json({ error: error instanceof Error ? error.message : 'Inventory item could not be updated.' }); }

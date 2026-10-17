@@ -1,3 +1,5 @@
+import { Prisma } from '@prisma/client';
+import { reverseJobInventory } from '../goldAllocation';
 import { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import { isNonNegativeNumber, isPositiveNumber, isValidNonFutureDate, isValidPHContact, isValidEmail } from '../validation';
@@ -197,13 +199,13 @@ router.delete('/:invoiceId', async (req: Request, res: Response) => {
         const inquiryId = sale.job.inquiryId;
         await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
         await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
-        await tx.inventory.updateMany({ where: { jobCostId: sale.job.jobCostId, deletedAt: null }, data: { deletedAt: new Date() } });
+        await reverseJobInventory(tx, sale.job.jobCostId);
         await validateInventoryLedger(tx);
         if (inquiryId) await tx.inquiries.update({ where: { inquiryId }, data: { status: 'PENDING' } });
       } else {
         await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
       }
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     res.json({ message: 'Sale deleted; its inquiry has been reopened when applicable.' });
   } catch (error) {
     const statusCode = Number((error as { statusCode?: number })?.statusCode);

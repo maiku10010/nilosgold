@@ -294,11 +294,8 @@ router.delete('/:jobCostId', async (req, res) => {
                 await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
             }
             await tx.job_Cost.update({ where: { jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
-            const movements = await tx.inventory.findMany({ where: { jobCostId, deletedAt: null } });
-            if (movements.length) {
-                await tx.inventory.updateMany({ where: { jobCostId, deletedAt: null }, data: { deletedAt: new Date() } });
-                await (0, inventoryLedger_1.validateInventoryLedger)(tx);
-            }
+            await (0, goldAllocation_1.reverseJobInventory)(tx, jobCostId);
+            await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             if (job.inquiryId)
                 await tx.inquiries.update({ where: { inquiryId: job.inquiryId }, data: { status: 'PENDING' } });
         }, { isolationLevel: client_1.Prisma.TransactionIsolationLevel.Serializable });

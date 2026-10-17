@@ -1,5 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const client_1 = require("@prisma/client");
+const goldAllocation_1 = require("../goldAllocation");
 const express_1 = require("express");
 const db_1 = require("../db");
 const validation_1 = require("../validation");
@@ -203,7 +205,7 @@ router.delete('/:invoiceId', async (req, res) => {
                 const inquiryId = sale.job.inquiryId;
                 await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
                 await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
-                await tx.inventory.updateMany({ where: { jobCostId: sale.job.jobCostId, deletedAt: null }, data: { deletedAt: new Date() } });
+                await (0, goldAllocation_1.reverseJobInventory)(tx, sale.job.jobCostId);
                 await (0, inventoryLedger_1.validateInventoryLedger)(tx);
                 if (inquiryId)
                     await tx.inquiries.update({ where: { inquiryId }, data: { status: 'PENDING' } });
@@ -211,7 +213,7 @@ router.delete('/:invoiceId', async (req, res) => {
             else {
                 await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
             }
-        });
+        }, { isolationLevel: client_1.Prisma.TransactionIsolationLevel.Serializable });
         res.json({ message: 'Sale deleted; its inquiry has been reopened when applicable.' });
     }
     catch (error) {

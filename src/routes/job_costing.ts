@@ -9,7 +9,7 @@ import { isNonNegativeNumber, isPositiveNumber, isTodayOrFutureDate } from '../v
 import { readyEmail, sendSystemEmail } from '../services/email';
 import { validateInventoryLedger } from '../inventoryLedger';
 import { withSaleTotals } from '../accounting';
-import { goldWeight, syncGoldAllocation, releaseGoldAllocation } from '../goldAllocation';
+import { goldWeight, syncGoldAllocation, releaseGoldAllocation, reverseJobInventory } from '../goldAllocation';
 
 const router = Router();
 const includeJob = {
@@ -272,11 +272,8 @@ router.delete('/:jobCostId', async (req: Request, res: Response) => {
         await tx.sales.update({ where: { invoiceId }, data: { deletedAt: new Date() } });
       }
       await tx.job_Cost.update({ where: { jobCostId }, data: { deletedAt: new Date(), inquiryId: null } });
-      const movements = await tx.inventory.findMany({ where: { jobCostId, deletedAt: null } });
-      if (movements.length) {
-        await tx.inventory.updateMany({ where: { jobCostId, deletedAt: null }, data: { deletedAt: new Date() } });
-        await validateInventoryLedger(tx);
-      }
+      await reverseJobInventory(tx, jobCostId);
+      await validateInventoryLedger(tx);
       if (job.inquiryId) await tx.inquiries.update({ where: { inquiryId: job.inquiryId }, data: { status: 'PENDING' } });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     res.json({ message: 'Job costing and its linked invoice were removed; the inquiry is pending again.' });

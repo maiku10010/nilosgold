@@ -188,7 +188,7 @@ model Inventory {
   unit        String
   unitPrice   Decimal   @default(0.00)
   category    InventoryCategory @default(GOLD)
-  /// GOLD and SCRAP may have a karat; NULL preserves unknown historical purity.
+  /// Purity for GOLD; sourceKarat for SCRAP movements. NULL preserves unknown purity.
   goldKarat   Int? @db.SmallInt @map("gold_karat")
   sourceSheet String? @map("source_sheet")
   sourceRow Int? @map("source_row")

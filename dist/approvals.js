@@ -257,14 +257,17 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                     ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
                 } });
             if (goldRestoreSnapshot && Array.isArray(goldRestoreSnapshot.inventoryMovement)) {
-                await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: new Date() } });
+                await tx.inventory.updateMany({ where: { jobCostId: id, category: { not: 'SCRAP' } }, data: { deletedAt: new Date() } });
                 for (const row of goldRestoreSnapshot.inventoryMovement) {
+                    if (row.category === 'SCRAP')
+                        continue;
                     await tx.inventory.update({ where: { referenceId: row.referenceId }, data: {
                             itemName: row.itemName, goldKarat: row.goldKarat ?? null, unit: row.unit,
-                            quantityIn: row.quantityIn, quantityOut: row.quantityOut, quantityLoss: row.quantityLoss, unitPrice: row.unitPrice,
+                            quantityIn: row.quantityIn, quantityOut: row.quantityOut, quantityLoss: row.category === 'GOLD' ? 0 : row.quantityLoss, unitPrice: row.unitPrice,
                             deletedAt: row.deletedAt ? new Date(row.deletedAt) : null,
                         } });
                 }
+                await (0, goldAllocation_1.restoreScrapRecovery)(tx, id, goldRestoreSnapshot.inventoryMovement);
                 await tx.job_Cost.update({ where: { jobCostId: id }, data: { goldKarat: goldRestoreSnapshot.goldKarat ?? null } });
             }
             else if (!rules.gold) {
@@ -311,9 +314,9 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
             if (!Number.isFinite(unitPrice) || unitPrice <= 0)
                 throw new Error('Unit price must be greater than zero.');
             const category = String(changes.category ?? current.category);
-            const quantityIn = Number(changes.quantityIn ?? changes.goldIn ?? current.quantityIn);
-            const quantityOut = Number(changes.quantityOut ?? changes.goldOut ?? current.quantityOut);
-            const quantityLoss = Number(changes.quantityLoss ?? changes.scraps ?? current.quantityLoss);
+            const quantityIn = category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(changes.quantityIn ?? changes.goldIn ?? current.quantityIn) : Number(changes.quantityIn ?? changes.goldIn ?? current.quantityIn);
+            const quantityOut = category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(changes.quantityOut ?? changes.goldOut ?? current.quantityOut) : Number(changes.quantityOut ?? changes.goldOut ?? current.quantityOut);
+            const quantityLoss = category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(changes.quantityLoss ?? changes.scraps ?? current.quantityLoss) : Number(changes.quantityLoss ?? changes.scraps ?? current.quantityLoss);
             await tx.inventory.update({ where: { referenceId: id }, data: {
                     ...(changes.itemName !== undefined ? { itemName: changes.itemName } : {}),
                     category,
@@ -345,7 +348,7 @@ async function applyDelete(tx, request) {
             await tx.sales.update({ where: { invoiceId: id }, data: { deletedAt: now } });
             if (sale.job) {
                 await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: now, inquiryId: null } });
-                await tx.inventory.updateMany({ where: { jobCostId: sale.job.jobCostId, deletedAt: null }, data: { deletedAt: now } });
+                await (0, goldAllocation_1.reverseJobInventory)(tx, sale.job.jobCostId);
                 await (0, inventoryLedger_1.validateInventoryLedger)(tx);
                 if (sale.job.inquiryId)
                     await tx.inquiries.update({ where: { inquiryId: sale.job.inquiryId }, data: { status: 'PENDING' } });
@@ -357,11 +360,8 @@ async function applyDelete(tx, request) {
             if (!job)
                 throw new Error('Job costing is no longer active.');
             await tx.job_Cost.update({ where: { jobCostId: id }, data: { deletedAt: now, inquiryId: null } });
-            const movements = await tx.inventory.findMany({ where: { jobCostId: id, deletedAt: null } });
-            if (movements.length) {
-                await tx.inventory.updateMany({ where: { jobCostId: id, deletedAt: null }, data: { deletedAt: now } });
-                await (0, inventoryLedger_1.validateInventoryLedger)(tx);
-            }
+            await (0, goldAllocation_1.reverseJobInventory)(tx, id);
+            await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             if (job.sales)
                 await tx.sales.update({ where: { invoiceId: job.sales.invoiceId }, data: { deletedAt: now } });
             if (job.inquiryId)
@@ -412,7 +412,9 @@ async function undoApprovedRequest(tx, request) {
             if (before.jobCostId) {
                 await tx.job_Cost.update({ where: { jobCostId: before.jobCostId }, data: { deletedAt: null, inquiryId: before.job?.inquiryId ?? undefined } });
                 for (const row of before.job?.inventoryMovement ?? [])
-                    await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { deletedAt: row.deletedAt ? new Date(row.deletedAt) : null } });
+                    if (row.category !== 'SCRAP')
+                        await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { deletedAt: row.deletedAt ? new Date(row.deletedAt) : null } });
+                await (0, goldAllocation_1.restoreScrapRecovery)(tx, before.jobCostId, before.job?.inventoryMovement ?? []);
                 await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             }
             return;
@@ -420,10 +422,13 @@ async function undoApprovedRequest(tx, request) {
         case 'JOB_COST': {
             await tx.job_Cost.update({ where: { jobCostId: id }, data: { deletedAt: null, inquiryId: before.inquiryId ?? undefined } });
             await tx.sales.updateMany({ where: { jobCostId: id }, data: { deletedAt: null } });
-            await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: new Date() } });
+            await tx.inventory.updateMany({ where: { jobCostId: id, category: { not: 'SCRAP' } }, data: { deletedAt: new Date() } });
             for (const row of before.inventoryMovement ?? []) {
+                if (row.category === 'SCRAP')
+                    continue;
                 await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { deletedAt: row.deletedAt ? new Date(row.deletedAt) : null } });
             }
+            await (0, goldAllocation_1.restoreScrapRecovery)(tx, id, before.inventoryMovement ?? []);
             await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             return;
         }

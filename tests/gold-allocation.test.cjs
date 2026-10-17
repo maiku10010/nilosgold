@@ -5,16 +5,17 @@ const { goldMaterialCost, goldWeight, syncGoldAllocation } = require('../dist/go
 const { calculateInventoryBalances } = require('../dist/inventoryLedger');
 
 const source = (data = {}) => ({ referenceId: '18K-IN', category: 'GOLD', goldKarat: 18, itemName: 'Gold · 18K', unit: 'grams', quantityIn: new Prisma.Decimal('1.2'), quantityOut: new Prisma.Decimal(0), quantityLoss: new Prisma.Decimal(0), deletedAt: null, jobCostId: null, ...data });
+const categoryMatches = (row, category) => !category || (typeof category === 'string' ? row.category === category : category.not ? row.category !== category.not : category.in.includes(row.category));
 function database(rows) {
   const job = { jobCostId: 'JOB-1', serviceType: 'Repair', goldKarat: 18, goldUsed: '0', goldScrap: '0', goldCostPerG: 8000, universalReferenceId: 'REF-1', deletedAt: null, sales: { invoiceId: 'INV-1', serviceType: 'Repair', price: 15000, payments: [] } };
   return {
     rows, job,
     inventory: {
       findFirst: async ({ where }) => rows.find(row => !row.deletedAt && row.quantityIn.greaterThan(0) && (where.referenceId ? row.referenceId === where.referenceId : row.goldKarat === where.goldKarat)) ?? null,
-      findMany: async ({ where = {} } = {}) => rows.filter(row => (!where.category || row.category === where.category) && (!Object.hasOwn(where, 'goldKarat') || row.goldKarat === where.goldKarat) && (!where.jobCostId || row.jobCostId === where.jobCostId) && (!Object.hasOwn(where, 'deletedAt') || row.deletedAt === where.deletedAt)),
+      findMany: async ({ where = {} } = {}) => rows.filter(row => categoryMatches(row, where.category) && (!Object.hasOwn(where, 'goldKarat') || row.goldKarat === where.goldKarat) && (!where.jobCostId || row.jobCostId === where.jobCostId) && (!Object.hasOwn(where, 'deletedAt') || row.deletedAt === where.deletedAt)),
       create: async ({ data }) => { const row = source(data); rows.push(row); return row; },
       update: async ({ where, data }) => { const row = rows.find(row => row.referenceId === where.referenceId); Object.assign(row, data); return row; },
-      updateMany: async ({ where, data }) => { rows.filter(row => where.referenceId ? where.referenceId.in.includes(row.referenceId) : row.jobCostId === where.jobCostId && (!where.category || row.category === where.category)).forEach(row => Object.assign(row, data)); return {}; },
+      updateMany: async ({ where, data }) => { rows.filter(row => where.referenceId ? where.referenceId.in.includes(row.referenceId) : row.jobCostId === where.jobCostId && categoryMatches(row, where.category)).forEach(row => Object.assign(row, data)); return {}; },
     },
     job_Cost: {
       findFirst: async () => job,
@@ -22,6 +23,7 @@ function database(rows) {
     },
   };
 }
+const scrapNet = (tx, karat) => tx.rows.filter(row => row.category === 'SCRAP' && !row.deletedAt && (karat === undefined || row.goldKarat === karat)).reduce((sum, row) => sum.plus(row.quantityIn).minus(row.quantityOut).minus(row.quantityLoss), new Prisma.Decimal(0)).toString();
 const allocation = (changes = {}) => ({ goldSourceId: '18K-IN', goldUsed: goldWeight('1'), goldScrap: goldWeight('0.2'), goldCostPerG: 8000, jobCostId: 'JOB-1', universalReferenceId: 'REF-1', ...changes });
 
 test('exact Decimal arithmetic accepts 1 + 0.2 against 1.2 and records the selected karat', async () => {
@@ -31,13 +33,14 @@ test('exact Decimal arithmetic accepts 1 + 0.2 against 1.2 and records the selec
   assert.equal(movement.goldKarat, 18);
   assert.equal(movement.itemName, 'Gold · 18K');
   assert.equal(movement.quantityOut.toString(), '1');
-  assert.equal(movement.quantityLoss.toString(), '0.2');
-  assert.equal(calculateInventoryBalances(tx.rows).get(movement.referenceId), 0);
+  assert.equal(movement.quantityLoss.toString(), '0');
+  assert.equal(scrapNet(tx), '0.2');
+  assert.equal(calculateInventoryBalances(tx.rows).get(movement.referenceId), 0.2);
 });
 
-test('shortage rejects 1 + 0.201 without borrowing stock from another karat', async () => {
+test('shortage rejects gold used above available stock without borrowing from another karat', async () => {
   const tx = database([source(), source({ referenceId: '14K-IN', goldKarat: 14, quantityIn: new Prisma.Decimal(10) })]);
-  await assert.rejects(() => syncGoldAllocation(tx, allocation({ goldScrap: goldWeight('0.201') })), error => {
+  await assert.rejects(() => syncGoldAllocation(tx, allocation({ goldUsed: goldWeight('1.201') })), error => {
     assert.equal(error.field, 'goldUsed');
     assert.match(error.message, /Insufficient Gold · 18K/);
     assert.match(error.message, /available is 1.2 g/);
@@ -97,7 +100,8 @@ test('staff requests retain milligram precision and approval applies the chosen 
   await approve({ params: { requestId: 'APP-1' }, body: {}, user: { empId: 'ADMIN', empRole: 'Admin', empName: 'Admin' } }, reviewed);
   assert.equal(reviewed.statusCode, 200);
   const movement = tx.rows.find(row => row.jobCostId === 'JOB-1');
-  assert.equal(movement.quantityOut.plus(movement.quantityLoss).toString(), '1.2');
+  assert.equal(movement.quantityOut.plus(movement.quantityLoss).toString(), '1.001');
+  assert.equal(scrapNet(tx), '0.199');
   assert.equal(tx.job.goldKarat, 18);
 });
 
@@ -127,7 +131,8 @@ test('undo restores the exact original gold allocation, including legacy unspeci
   await undo({ params: { requestId: 'APP-UNDO' }, user }, restored);
   assert.equal(restored.statusCode, 200);
   assert.equal(tx.job.goldKarat, null);
-  assert.equal(tx.rows.filter(row => row.jobCostId === 'JOB-1' && !row.deletedAt).length, 0);
+  assert.equal(tx.rows.filter(row => row.jobCostId === 'JOB-1' && row.category !== 'SCRAP' && !row.deletedAt).length, 0);
+  assert.equal(scrapNet(tx), '0');
   assert.equal(tx.job.goldUsed.toString(), '0');
 });
 
@@ -154,44 +159,47 @@ test('the costing create route deducts the required gold source and persists its
   assert.equal(result.body.goldKarat, 18);
   assert.equal(result.locals.auditRecordId, tx.job.jobCostId);
   const out = tx.rows.find(row => row.jobCostId === tx.job.jobCostId);
-  assert.equal(out.quantityOut.plus(out.quantityLoss).toString(), '1.2');
+  assert.equal(out.quantityOut.plus(out.quantityLoss).toString(), '1');
+  assert.equal(scrapNet(tx), '0.2');
 });
 
 
-test('scrap recovery uses grams, the job reference and selected karat; edits adjust rather than duplicate', async () => {
+test('scrap edits append corrections, retain source purity and do not repeat identical saves', async () => {
   const tx = database([source(), source({ referenceId: '14K-IN', goldKarat: 14, quantityIn: new Prisma.Decimal(10) })]);
   await syncGoldAllocation(tx, allocation());
-  let scrap = tx.rows.find(row => row.category === 'SCRAP');
-  assert.equal(scrap.itemName, 'Scrap gold');
-  assert.equal(scrap.unit, 'grams');
-  assert.equal(scrap.universalReferenceId, 'JOB-1');
-  assert.equal(scrap.jobCostId, 'JOB-1');
-  assert.equal(scrap.goldKarat, 18);
-  assert.equal(scrap.quantityIn.toString(), '0.2');
+  const original = tx.rows.find(row => row.category === 'SCRAP');
+  assert.equal(original.itemName, 'Scrap gold');
+  assert.equal(original.unit, 'grams');
+  assert.equal(original.universalReferenceId, 'JOB-1');
+  assert.equal(original.jobCostId, 'JOB-1');
+  assert.equal(original.goldKarat, 18);
+  assert.equal(original.quantityIn.toString(), '0.2');
+  await syncGoldAllocation(tx, allocation({ goldScrap: goldWeight('.3') }));
+  assert.equal(scrapNet(tx, 18), '0.3');
+  const increasedCount = tx.rows.length;
+  await syncGoldAllocation(tx, allocation({ goldScrap: goldWeight('.3') }));
+  assert.equal(tx.rows.length, increasedCount);
   await syncGoldAllocation(tx, allocation({ goldSourceId: '14K-IN', goldScrap: goldWeight('.125') }));
-  assert.equal(tx.rows.filter(row => row.category === 'SCRAP').length, 1);
-  assert.equal(scrap.goldKarat, 14);
-  assert.equal(scrap.quantityIn.toString(), '0.125');
+  assert.equal(scrapNet(tx, 18), '0');
+  assert.equal(scrapNet(tx, 14), '0.125');
   await syncGoldAllocation(tx, allocation({ goldSourceId: '14K-IN', goldScrap: goldWeight('0') }));
-  assert.ok(scrap.deletedAt);
+  assert.equal(scrapNet(tx), '0');
   await syncGoldAllocation(tx, allocation({ goldSourceId: '14K-IN', goldScrap: goldWeight('.001') }));
-  assert.equal(scrap.deletedAt, null);
-  assert.equal(scrap.quantityIn.toString(), '0.001');
+  assert.equal(scrapNet(tx), '0.001');
+  assert.equal(original.quantityIn.toString(), '0.2');
+  assert.equal(tx.rows.filter(row => row.category === 'SCRAP' && row.deletedAt).length, 0);
 });
 
-test('scrap balances stay separate by karat and never replenish usable gold', async () => {
+test('scrap pools all karats without consuming or replenishing usable gold', async () => {
   const tx = database([source()]);
-  await syncGoldAllocation(tx, allocation());
-  const scrap = tx.rows.find(row => row.category === 'SCRAP');
-  assert.equal(calculateInventoryBalances(tx.rows).get(scrap.referenceId), .2);
-  await assert.rejects(() => syncGoldAllocation(tx, allocation({ jobCostId: 'JOB-2', goldUsed: goldWeight('.1'), goldScrap: goldWeight('0') })), /Insufficient/);
-  assert.throws(() => calculateInventoryBalances([
-    source({ category: 'SCRAP', goldKarat: 18 }),
-    source({ category: 'SCRAP', goldKarat: 14, referenceId: 'SCRAP-OUT', quantityIn: new Prisma.Decimal(0), quantityOut: new Prisma.Decimal('.1') }),
-  ]), /Insufficient/);
+  await syncGoldAllocation(tx, allocation({ goldUsed: goldWeight('1.2'), goldScrap: goldWeight('2') }));
+  assert.equal(scrapNet(tx), '2');
+  await assert.rejects(() => syncGoldAllocation(tx, allocation({ jobCostId: 'JOB-2', goldUsed: goldWeight('.001'), goldScrap: goldWeight('0') })), /Insufficient/);
+  const pooled = [source({ category: 'SCRAP', goldKarat: 18 }), source({ category: 'SCRAP', goldKarat: 14, referenceId: 'SCRAP-OUT', quantityIn: new Prisma.Decimal(0), quantityOut: new Prisma.Decimal('.1') })];
+  assert.equal(calculateInventoryBalances(pooled).get('SCRAP-OUT'), 1.1);
 });
 
-test('job deletion archives recovered scrap and gold deductions within the same serializable transaction', async () => {
+test('job deletion reverses scrap and archives gold deductions in the same serializable transaction', async () => {
   const tx = database([source()]);
   tx.job.sales = null;
   Object.assign(prisma, tx);
@@ -205,7 +213,8 @@ test('job deletion archives recovered scrap and gold deductions within the same 
   assert.equal(result.statusCode, 200);
   assert.equal(transactions, 1);
   assert.ok(tx.job.deletedAt);
-  assert.equal(tx.rows.filter(row => row.jobCostId === 'JOB-1' && !row.deletedAt).length, 0);
+  assert.equal(tx.rows.filter(row => row.jobCostId === 'JOB-1' && row.category !== 'SCRAP' && !row.deletedAt).length, 0);
+  assert.equal(scrapNet(tx), '0');
   assert.doesNotThrow(() => calculateInventoryBalances(tx.rows.filter(row => !row.deletedAt)));
 });
 
@@ -256,16 +265,14 @@ test('approval edit and undo restore the original scrap amount and karat without
   const approved = response();
   await approve({ params: { requestId: 'APP-SCRAP' }, body: {}, user }, approved);
   assert.equal(approved.statusCode, 200);
-  let recovered = tx.rows.find(row => row.category === 'SCRAP');
-  assert.equal(recovered.quantityIn.toString(), '0.125');
-  assert.equal(recovered.goldKarat, 14);
+  assert.equal(scrapNet(tx, 18), '0');
+  assert.equal(scrapNet(tx, 14), '0.125');
   const restored = response();
   await undo({ params: { requestId: 'APP-SCRAP' }, user }, restored);
   assert.equal(restored.statusCode, 200);
-  recovered = tx.rows.find(row => row.category === 'SCRAP' && !row.deletedAt);
-  assert.equal(String(recovered.quantityIn), '0.2');
-  assert.equal(recovered.goldKarat, 18);
-  assert.equal(tx.rows.filter(row => row.category === 'SCRAP' && !row.deletedAt).length, 1);
+  assert.equal(scrapNet(tx, 18), '0.2');
+  assert.equal(scrapNet(tx, 14), '0');
+  assert.equal(scrapNet(tx), '0.2');
 });
 
 test('staff and direct edits validate the stored service type rather than a spoofed payload type', async () => {
@@ -467,4 +474,55 @@ test('inquiry API exposes its stored category as the canonical serviceType', asy
   const result = response();
   await list({}, result);
   assert.deepEqual(result.body.map(row => row.serviceType), ['Cleaning', 'Custom']);
+});
+
+
+test('approved job deletion and undo append scrap reversal and recovery without deleting history', async () => {
+  const tx = database([source()]); tx.job.sales = null;
+  await syncGoldAllocation(tx, allocation());
+  tx.job.inventoryMovement = JSON.parse(JSON.stringify(tx.rows.filter(row => row.jobCostId === 'JOB-1')));
+  Object.assign(prisma, tx);
+  let queued;
+  prisma.approvalRequest = {
+    findFirst: async () => null,
+    create: async ({ data }) => (queued = { ...data, requestId: 'APP-DELETE-SCRAP', status: 'PENDING' }),
+    findUnique: async () => queued,
+    update: async ({ data }) => (queued = { ...queued, ...data }),
+  };
+  prisma.systemLog = { create: async () => ({}) };
+  prisma.sales = { updateMany: async () => ({}) };
+  prisma.$transaction = async (fn, options) => { assert.equal(options.isolationLevel, 'Serializable'); return fn(prisma); };
+  const pending = response();
+  await approvals.queueStaffChanges({ method: 'DELETE', path: '/job-cost/JOB-1', user: { empId: 'STAFF', empRole: 'Staff' } }, pending, () => assert.fail('must queue'));
+  assert.equal(pending.statusCode, 202);
+  const user = { empId: 'ADMIN', empRole: 'Admin', empName: 'Admin' };
+  const approved = response();
+  await approve({ params: { requestId: 'APP-DELETE-SCRAP' }, body: {}, user }, approved);
+  assert.equal(approved.statusCode, 200);
+  assert.equal(scrapNet(tx), '0');
+  assert.ok(tx.job.deletedAt);
+  const restored = response();
+  await undo({ params: { requestId: 'APP-DELETE-SCRAP' }, user }, restored);
+  assert.equal(restored.statusCode, 200);
+  assert.equal(tx.job.deletedAt, null);
+  assert.equal(scrapNet(tx), '0.2');
+  assert.equal(tx.rows.filter(row => row.category === 'SCRAP' && !row.deletedAt).length, 3);
+});
+
+test('scrap API exposes job reference, source karat, signed grams and one pooled balance', async () => {
+  const tx = database([
+    source({ referenceId: 'S-1', category: 'SCRAP', jobCostId: 'JOB-1', goldKarat: 18, quantityIn: new Prisma.Decimal('.1') }),
+    source({ referenceId: 'S-2', category: 'SCRAP', jobCostId: 'JOB-2', goldKarat: 14, quantityIn: new Prisma.Decimal('.2') }),
+  ]);
+  Object.assign(prisma, tx);
+  const router = require('../dist/routes/inventory').default;
+  const list = router.stack.find(layer => layer.route?.methods.get).route.stack[0].handle;
+  const result = response();
+  await list({ query: {} }, result);
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body[0].jobId, 'JOB-1');
+  assert.equal(result.body[0].sourceKarat, 18);
+  assert.equal(result.body[0].grams, '0.1');
+  assert.equal(result.body[1].sourceKarat, 14);
+  assert.equal(result.body[1].balance, .3);
 });

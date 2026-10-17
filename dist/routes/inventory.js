@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const goldAllocation_1 = require("../goldAllocation");
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const db_1 = require("../db");
@@ -7,6 +8,10 @@ const validation_1 = require("../validation");
 const friendlyId_1 = require("../friendlyId");
 const inventoryLedger_1 = require("../inventoryLedger");
 const router = (0, express_1.Router)();
+const scrapMetadata = (row) => row.category === 'SCRAP' ? {
+    jobId: row.jobCostId, sourceKarat: row.goldKarat,
+    grams: row.quantityIn.minus(row.quantityOut).minus(row.quantityLoss).toString(),
+} : {};
 const categories = ['GOLD', 'SCRAP', 'SILVER', 'GEMSTONES', 'BOXES', 'PACKAGING', 'FINDINGS', 'TOOLS'];
 const unitsByCategory = {
     SCRAP: ['grams'], GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'],
@@ -39,7 +44,7 @@ function parseMovement(body, existing) {
         return 'Karat can only be set for gold or scrap inventory.';
     if (body.date !== undefined && !(0, validation_1.isValidNonFutureDate)(body.date))
         return 'Inventory date must be a valid date no later than today.';
-    return { category: category, itemName, unit, goldKarat: ['GOLD', 'SCRAP'].includes(category) ? goldKarat : null, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
+    return { category: category, itemName, unit, goldKarat: ['GOLD', 'SCRAP'].includes(category) ? goldKarat : null, quantityIn: category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(quantityIn) : Number(quantityIn), quantityOut: category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(quantityOut) : Number(quantityOut), quantityLoss: category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(quantityLoss) : Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
 }
 router.post('/', async (req, res) => {
     try {
@@ -58,7 +63,7 @@ router.post('/', async (req, res) => {
             const balances = (0, inventoryLedger_1.calculateInventoryBalances)(rows);
             const saved = rows.find(row => row.referenceId === created.referenceId);
             const balance = balances.get(created.referenceId) ?? 0;
-            return { ...saved, balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
+            return { ...saved, ...scrapMetadata(saved), balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
         }, { isolationLevel: client_1.Prisma.TransactionIsolationLevel.Serializable });
         res.locals.auditRecordId = saved.referenceId;
         res.status(201).json(saved);
@@ -76,7 +81,7 @@ router.get('/', async (req, res) => {
             return res.status(400).json({ error: 'Choose a supported inventory category.' });
         const rows = await db_1.prisma.inventory.findMany({ where: { deletedAt: null, ...(category ? { category } : {}) }, orderBy: [{ updatedAt: 'asc' }, { referenceId: 'asc' }] });
         const balances = (0, inventoryLedger_1.calculateInventoryBalances)(rows);
-        res.json(rows.map(row => ({ ...row, balance: balances.get(row.referenceId) ?? 0, totalGold: row.category === 'GOLD' ? balances.get(row.referenceId) ?? 0 : 0 })));
+        res.json(rows.map(row => ({ ...row, ...scrapMetadata(row), balance: balances.get(row.referenceId) ?? 0, totalGold: row.category === 'GOLD' ? balances.get(row.referenceId) ?? 0 : 0 })));
     }
     catch (error) {
         console.error('Error fetching inventory items:', error);
@@ -106,7 +111,7 @@ router.put('/:referenceId', async (req, res) => {
             const balances = (0, inventoryLedger_1.calculateInventoryBalances)(rows);
             const saved = rows.find(row => row.referenceId === targetId);
             const balance = balances.get(targetId) ?? 0;
-            return { ...saved, balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
+            return { ...saved, ...scrapMetadata(saved), balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
         }, { isolationLevel: client_1.Prisma.TransactionIsolationLevel.Serializable });
         res.json(saved);
     }

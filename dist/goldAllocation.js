@@ -5,6 +5,8 @@ exports.goldWeight = goldWeight;
 exports.goldMaterialCost = goldMaterialCost;
 exports.syncGoldAllocation = syncGoldAllocation;
 exports.syncScrapRecovery = syncScrapRecovery;
+exports.restoreScrapRecovery = restoreScrapRecovery;
+exports.reverseJobInventory = reverseJobInventory;
 exports.releaseGoldAllocation = releaseGoldAllocation;
 const client_1 = require("@prisma/client");
 const friendlyId_1 = require("./friendlyId");
@@ -33,10 +35,10 @@ async function syncGoldAllocation(tx, input) {
         throw Object.assign(new Error('Choose an active gold source with a recorded karat.'), { statusCode: 400, field: 'goldSourceId' });
     const rows = await tx.inventory.findMany({ where: { category: 'GOLD', goldKarat: source.goldKarat, deletedAt: null } });
     const available = rows.filter(row => row.jobCostId !== input.jobCostId).reduce((sum, row) => sum.plus(new client_1.Prisma.Decimal(row.quantityIn).minus(row.quantityOut).minus(row.quantityLoss).times(row.unit === 'troy oz' ? '31.1034768' : '1')), new client_1.Prisma.Decimal(0));
-    const required = input.goldUsed.plus(input.goldScrap);
+    const required = input.goldUsed;
     const name = (0, exports.goldSourceName)(source.goldKarat);
     if (required.greaterThan(available)) {
-        throw Object.assign(new Error(`Insufficient ${name}: used + scrap is ${required.toString()} g; available is ${client_1.Prisma.Decimal.max(0, available).toString()} g.`), { statusCode: 409, field: 'goldUsed' });
+        throw Object.assign(new Error(`Insufficient ${name}: gold used is ${required.toString()} g; available is ${client_1.Prisma.Decimal.max(0, available).toString()} g.`), { statusCode: 409, field: 'goldUsed' });
     }
     const movements = await tx.inventory.findMany({ where: { jobCostId: input.jobCostId, category: 'GOLD' } });
     const current = movements[0];
@@ -45,7 +47,7 @@ async function syncGoldAllocation(tx, input) {
         await tx.inventory.updateMany({ where: { referenceId: { in: movements.slice(1).map(row => row.referenceId) } }, data: { deletedAt: new Date() } });
     const data = {
         itemName: source.itemName, goldKarat: source.goldKarat, unit: 'grams', category: 'GOLD',
-        quantityIn: new client_1.Prisma.Decimal(0), quantityOut: input.goldUsed, quantityLoss: input.goldScrap,
+        quantityIn: new client_1.Prisma.Decimal(0), quantityOut: input.goldUsed, quantityLoss: new client_1.Prisma.Decimal(0),
         unitPrice: input.goldCostPerG, deletedAt: required.isZero() ? new Date() : null,
     };
     if (current)
@@ -59,24 +61,45 @@ async function syncGoldAllocation(tx, input) {
     await tx.job_Cost.update({ where: { jobCostId: input.jobCostId }, data: { goldKarat: source.goldKarat } });
     return source.goldKarat;
 }
+function scrapBalances(rows) {
+    const totals = new Map();
+    for (const row of rows) {
+        if (row.category !== 'SCRAP' || row.deletedAt)
+            continue;
+        const karat = row.goldKarat ?? null;
+        totals.set(karat, (totals.get(karat) ?? new client_1.Prisma.Decimal(0)).plus(row.quantityIn).minus(row.quantityOut).minus(row.quantityLoss));
+    }
+    return totals;
+}
+async function correctScrapBalances(tx, jobCostId, targets) {
+    const current = scrapBalances(await tx.inventory.findMany({ where: { jobCostId, category: 'SCRAP', deletedAt: null } }));
+    for (const karat of new Set([...current.keys(), ...targets.keys()])) {
+        const delta = (targets.get(karat) ?? new client_1.Prisma.Decimal(0)).minus(current.get(karat) ?? 0);
+        if (delta.isZero())
+            continue;
+        // Append corrections: the original recovery and its source purity remain reviewable.
+        await tx.inventory.create({ data: {
+                referenceId: (0, friendlyId_1.friendlyId)(), jobCostId, universalReferenceId: jobCostId,
+                itemName: 'Scrap gold', category: 'SCRAP', unit: 'grams', goldKarat: karat,
+                quantityIn: delta.isPositive() ? delta : new client_1.Prisma.Decimal(0),
+                quantityOut: delta.isNegative() ? delta.abs() : new client_1.Prisma.Decimal(0),
+                quantityLoss: new client_1.Prisma.Decimal(0), unitPrice: 0,
+            } });
+    }
+}
 async function syncScrapRecovery(tx, jobCostId, karat, quantity) {
-    const movements = await tx.inventory.findMany({ where: { jobCostId, category: 'SCRAP' } });
-    const current = movements[0];
-    if (movements.length > 1)
-        await tx.inventory.updateMany({ where: { referenceId: { in: movements.slice(1).map(row => row.referenceId) } }, data: { deletedAt: new Date() } });
-    const data = {
-        itemName: 'Scrap gold', category: 'SCRAP', unit: 'grams', goldKarat: karat,
-        universalReferenceId: jobCostId, quantityIn: quantity, quantityOut: new client_1.Prisma.Decimal(0),
-        quantityLoss: new client_1.Prisma.Decimal(0), unitPrice: 0, deletedAt: quantity.isZero() ? new Date() : null,
-    };
-    if (current)
-        await tx.inventory.update({ where: { referenceId: current.referenceId }, data });
-    else if (!quantity.isZero())
-        await tx.inventory.create({ data: { ...data, referenceId: (0, friendlyId_1.friendlyId)(), jobCostId } });
+    await correctScrapBalances(tx, jobCostId, new Map([[karat, quantity]]));
+}
+async function restoreScrapRecovery(tx, jobCostId, snapshot) {
+    await correctScrapBalances(tx, jobCostId, scrapBalances(snapshot));
+}
+/** Reverse recovered scrap while retaining its history; archive the other job deductions. */
+async function reverseJobInventory(tx, jobCostId) {
+    await syncScrapRecovery(tx, jobCostId, null, new client_1.Prisma.Decimal(0));
+    await tx.inventory.updateMany({ where: { jobCostId, category: { not: 'SCRAP' }, deletedAt: null }, data: { deletedAt: new Date() } });
 }
 async function releaseGoldAllocation(tx, jobCostId) {
-    for (const category of ['GOLD', 'SCRAP']) {
-        await tx.inventory.updateMany({ where: { jobCostId, category }, data: { deletedAt: new Date() } });
-    }
+    await syncScrapRecovery(tx, jobCostId, null, new client_1.Prisma.Decimal(0));
+    await tx.inventory.updateMany({ where: { jobCostId, category: 'GOLD' }, data: { deletedAt: new Date() } });
     await tx.job_Cost.update({ where: { jobCostId }, data: { goldKarat: null } });
 }

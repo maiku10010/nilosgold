@@ -11,7 +11,7 @@ import { friendlyId } from './friendlyId';
 import { isTodayOrFutureDate, isValidPHContact } from './validation';
 import { InventoryCategory } from '@prisma/client';
 import { paidTotal, setSalePaidTotal } from './accounting';
-import { goldWeight, syncGoldAllocation, releaseGoldAllocation } from './goldAllocation';
+import { goldWeight, syncGoldAllocation, releaseGoldAllocation, reverseJobInventory, restoreScrapRecovery } from './goldAllocation';
 
 type Entity = 'SALE' | 'JOB_COST' | 'INQUIRY' | 'EXPENSE' | 'INVENTORY' | 'CLIENT';
 type Action = 'UPDATE' | 'DELETE';
@@ -199,14 +199,16 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
         ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
       } });
       if (goldRestoreSnapshot && Array.isArray(goldRestoreSnapshot.inventoryMovement)) {
-        await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: new Date() } });
+        await tx.inventory.updateMany({ where: { jobCostId: id, category: { not: 'SCRAP' } }, data: { deletedAt: new Date() } });
         for (const row of goldRestoreSnapshot.inventoryMovement) {
+          if (row.category === 'SCRAP') continue;
           await tx.inventory.update({ where: { referenceId: row.referenceId }, data: {
             itemName: row.itemName, goldKarat: row.goldKarat ?? null, unit: row.unit,
-            quantityIn: row.quantityIn, quantityOut: row.quantityOut, quantityLoss: row.quantityLoss, unitPrice: row.unitPrice,
+            quantityIn: row.quantityIn, quantityOut: row.quantityOut, quantityLoss: row.category === 'GOLD' ? 0 : row.quantityLoss, unitPrice: row.unitPrice,
             deletedAt: row.deletedAt ? new Date(row.deletedAt) : null,
           } });
         }
+        await restoreScrapRecovery(tx, id, goldRestoreSnapshot.inventoryMovement);
         await tx.job_Cost.update({ where: { jobCostId: id }, data: { goldKarat: goldRestoreSnapshot.goldKarat ?? null } });
       } else if (!rules.gold) {
         await releaseGoldAllocation(tx, id);
@@ -244,9 +246,9 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       const unitPrice = Number(changes.unitPrice ?? current.unitPrice);
       if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new Error('Unit price must be greater than zero.');
       const category = String(changes.category ?? current.category) as InventoryCategory;
-      const quantityIn = Number(changes.quantityIn ?? changes.goldIn ?? current.quantityIn);
-      const quantityOut = Number(changes.quantityOut ?? changes.goldOut ?? current.quantityOut);
-      const quantityLoss = Number(changes.quantityLoss ?? changes.scraps ?? current.quantityLoss);
+      const quantityIn = category === 'SCRAP' ? goldWeight(changes.quantityIn ?? changes.goldIn ?? current.quantityIn) : Number(changes.quantityIn ?? changes.goldIn ?? current.quantityIn);
+      const quantityOut = category === 'SCRAP' ? goldWeight(changes.quantityOut ?? changes.goldOut ?? current.quantityOut) : Number(changes.quantityOut ?? changes.goldOut ?? current.quantityOut);
+      const quantityLoss = category === 'SCRAP' ? goldWeight(changes.quantityLoss ?? changes.scraps ?? current.quantityLoss) : Number(changes.quantityLoss ?? changes.scraps ?? current.quantityLoss);
       await tx.inventory.update({ where: { referenceId: id }, data: {
         ...(changes.itemName !== undefined ? { itemName: changes.itemName as string } : {}),
         category,
@@ -275,7 +277,7 @@ async function applyDelete(tx: Prisma.TransactionClient, request: any): Promise<
       await tx.sales.update({ where: { invoiceId: id }, data: { deletedAt: now } });
       if (sale.job) {
         await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: now, inquiryId: null } });
-        await tx.inventory.updateMany({ where: { jobCostId: sale.job.jobCostId, deletedAt: null }, data: { deletedAt: now } });
+        await reverseJobInventory(tx, sale.job.jobCostId);
         await validateInventoryLedger(tx);
         if (sale.job.inquiryId) await tx.inquiries.update({ where: { inquiryId: sale.job.inquiryId }, data: { status: 'PENDING' } });
       }
@@ -285,8 +287,8 @@ async function applyDelete(tx: Prisma.TransactionClient, request: any): Promise<
       const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: true } });
       if (!job) throw new Error('Job costing is no longer active.');
       await tx.job_Cost.update({ where: { jobCostId: id }, data: { deletedAt: now, inquiryId: null } });
-      const movements = await tx.inventory.findMany({ where: { jobCostId: id, deletedAt: null } });
-      if (movements.length) { await tx.inventory.updateMany({ where: { jobCostId: id, deletedAt: null }, data: { deletedAt: now } }); await validateInventoryLedger(tx); }
+      await reverseJobInventory(tx, id);
+      await validateInventoryLedger(tx);
       if (job.sales) await tx.sales.update({ where: { invoiceId: job.sales.invoiceId }, data: { deletedAt: now } });
       if (job.inquiryId) await tx.inquiries.update({ where: { inquiryId: job.inquiryId }, data: { status: 'PENDING' } });
       return;
@@ -327,7 +329,8 @@ async function undoApprovedRequest(tx: Prisma.TransactionClient, request: any): 
       await tx.sales.update({ where: { invoiceId: id }, data: { deletedAt: null } });
       if (before.jobCostId) {
         await tx.job_Cost.update({ where: { jobCostId: before.jobCostId }, data: { deletedAt: null, inquiryId: before.job?.inquiryId ?? undefined } });
-        for (const row of before.job?.inventoryMovement ?? []) await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { deletedAt: row.deletedAt ? new Date(row.deletedAt) : null } });
+        for (const row of before.job?.inventoryMovement ?? []) if (row.category !== 'SCRAP') await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { deletedAt: row.deletedAt ? new Date(row.deletedAt) : null } });
+        await restoreScrapRecovery(tx, before.jobCostId, before.job?.inventoryMovement ?? []);
         await validateInventoryLedger(tx);
       }
       return;
@@ -335,10 +338,12 @@ async function undoApprovedRequest(tx: Prisma.TransactionClient, request: any): 
     case 'JOB_COST': {
       await tx.job_Cost.update({ where: { jobCostId: id }, data: { deletedAt: null, inquiryId: before.inquiryId ?? undefined } });
       await tx.sales.updateMany({ where: { jobCostId: id }, data: { deletedAt: null } });
-      await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: new Date() } });
+      await tx.inventory.updateMany({ where: { jobCostId: id, category: { not: 'SCRAP' } }, data: { deletedAt: new Date() } });
       for (const row of before.inventoryMovement ?? []) {
+        if (row.category === 'SCRAP') continue;
         await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { deletedAt: row.deletedAt ? new Date(row.deletedAt) : null } });
       }
+      await restoreScrapRecovery(tx, id, before.inventoryMovement ?? []);
       await validateInventoryLedger(tx);
       return;
     }
