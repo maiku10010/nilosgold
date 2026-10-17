@@ -21,6 +21,7 @@ router.post('/', async (req, res) => {
                 email: req.body.email || null,
             }
         });
+        res.locals.auditRecordId = newClient.clientId;
         res.json({ ...newClient, balance: 0 });
     }
     catch (error) {

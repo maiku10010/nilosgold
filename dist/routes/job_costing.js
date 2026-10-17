@@ -124,6 +124,7 @@ router.post('/', async (req, res) => {
             });
             return withJobSaleTotals(await tx.job_Cost.findUniqueOrThrow({ where: { jobCostId: createdJob.jobCostId }, include: includeJob }));
         }, { isolationLevel: client_1.Prisma.TransactionIsolationLevel.Serializable });
+        res.locals.auditRecordId = jobCost.jobCostId;
         res.status(201).json(jobCost);
     }
     catch (error) {

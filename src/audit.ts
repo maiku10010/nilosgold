@@ -63,14 +63,13 @@ export async function auditMutations(req: Request, res: Response, next: NextFunc
     try { before = await (prisma as any)[model.delegate].findUnique({ where: { [model.idField]: entity.entityId } }); }
     catch (error) { console.error('Could not read previous audit record:', error); }
   }
-  let responseBody: unknown;
   const sendJson = res.json.bind(res);
-  res.json = ((payload: unknown) => { responseBody = payload; return sendJson(payload); }) as Response['json'];
-  res.once('finish', () => {
-    if (res.statusCode < 200 || res.statusCode >= 400) return;
+  res.json = ((responseBody: unknown) => {
+    if (res.statusCode < 200 || res.statusCode >= 400) return sendJson(responseBody);
     const action = res.statusCode === 202 ? `${method}_REQUESTED` : method;
     const responseEntity = model ? responseRecord(responseBody, model.idField) : null;
-    const recordId = entity.entityId ?? (model ? responseRecordId(responseBody, model.idField) ?? responseRecordId(body, model.idField) : null);
+    // Create routes supply the committed ID, rather than trusting an ID in the request body.
+    const recordId = res.locals.auditRecordId ?? entity.entityId ?? (model ? responseRecordId(responseBody, model.idField) : null);
     void prisma.systemLog.create({
       data: {
         actorEmpId: user.empId,
@@ -83,8 +82,12 @@ export async function auditMutations(req: Request, res: Response, next: NextFunc
         ipAddress: req.ip,
         userAgent: req.header('user-agent')?.slice(0, 400),
       },
-    }).catch(error => console.error('Could not write activity log:', error));
-  });
+    }).catch(error => console.error('Could not write activity log:', error))
+      .then(() => { sendJson(responseBody); });
+    // Persist the ID before sending the response; finish callbacks may be suspended
+    // once a serverless request completes.
+    return res;
+  }) as Response['json'];
   next();
 }
 

@@ -60,6 +60,7 @@ router.post('/', async (req, res) => {
             const balance = balances.get(created.referenceId) ?? 0;
             return { ...saved, balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
         }, { isolationLevel: client_1.Prisma.TransactionIsolationLevel.Serializable });
+        res.locals.auditRecordId = saved.referenceId;
         res.status(201).json(saved);
     }
     catch (error) {

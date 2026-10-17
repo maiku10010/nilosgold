@@ -37,6 +37,7 @@ router.post('/', async (req, res) => {
             },
             include: { client: true, jobCost: { include: { sales: true } } },
         });
+        res.locals.auditRecordId = inquiry.inquiryId;
         res.status(201).json(inquiry);
     }
     catch (error) {

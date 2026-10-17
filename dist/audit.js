@@ -79,15 +79,14 @@ async function auditMutations(req, res, next) {
             console.error('Could not read previous audit record:', error);
         }
     }
-    let responseBody;
     const sendJson = res.json.bind(res);
-    res.json = ((payload) => { responseBody = payload; return sendJson(payload); });
-    res.once('finish', () => {
+    res.json = ((responseBody) => {
         if (res.statusCode < 200 || res.statusCode >= 400)
-            return;
+            return sendJson(responseBody);
         const action = res.statusCode === 202 ? `${method}_REQUESTED` : method;
         const responseEntity = model ? responseRecord(responseBody, model.idField) : null;
-        const recordId = entity.entityId ?? (model ? responseRecordId(responseBody, model.idField) ?? responseRecordId(body, model.idField) : null);
+        // Create routes supply the committed ID, rather than trusting an ID in the request body.
+        const recordId = res.locals.auditRecordId ?? entity.entityId ?? (model ? responseRecordId(responseBody, model.idField) : null);
         void db_1.prisma.systemLog.create({
             data: {
                 actorEmpId: user.empId,
@@ -100,7 +99,11 @@ async function auditMutations(req, res, next) {
                 ipAddress: req.ip,
                 userAgent: req.header('user-agent')?.slice(0, 400),
             },
-        }).catch(error => console.error('Could not write activity log:', error));
+        }).catch(error => console.error('Could not write activity log:', error))
+            .then(() => { sendJson(responseBody); });
+        // Persist the ID before sending the response; finish callbacks may be suspended
+        // once a serverless request completes.
+        return res;
     });
     next();
 }

@@ -51,6 +51,7 @@ router.post('/', async (req: Request, res: Response) => {
       const balance = balances.get(created.referenceId) ?? 0;
       return { ...saved, balance, totalGold: saved.category === 'GOLD' ? balance : 0 };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    res.locals.auditRecordId = saved.referenceId;
     res.status(201).json(saved);
   } catch (error) {
     console.error('Error creating inventory item:', error);

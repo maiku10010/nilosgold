@@ -21,6 +21,7 @@ router.post('/', async (req: Request, res: Response) => {
         ...(date ? { expDate: new Date(date) } : {})
       }
     });
+    res.locals.auditRecordId = newExpense.expenseId;
     res.json(newExpense);
   } catch (error) {
     console.error('Error creating expense:', error);

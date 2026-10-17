@@ -25,6 +25,7 @@ router.post('/', async (req, res) => {
             }
         });
         const { password: _password, ...safeEmployee } = newEmployee;
+        res.locals.auditRecordId = newEmployee.empId;
         res.json(safeEmployee);
     }
     catch (error) {

@@ -22,6 +22,7 @@ router.post('/', async (req: Request, res: Response) => {
       }
     });
     const { password: _password, ...safeEmployee } = newEmployee;
+    res.locals.auditRecordId = newEmployee.empId;
     res.json(safeEmployee);
   } catch (error) {
     console.error('Error creating employee:', error);

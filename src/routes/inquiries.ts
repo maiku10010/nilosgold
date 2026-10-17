@@ -35,6 +35,7 @@ router.post('/', async (req: Request, res: Response) => {
       include: { client: true, jobCost: { include: { sales: true } } },
     });
 
+    res.locals.auditRecordId = inquiry.inquiryId;
     res.status(201).json(inquiry);
   } catch (error) {
     console.error('Error creating inquiry:', error);

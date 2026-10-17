@@ -124,6 +124,7 @@ router.post('/', async (req: Request, res: Response) => {
       return withJobSaleTotals(await tx.job_Cost.findUniqueOrThrow({ where: { jobCostId: createdJob.jobCostId }, include: includeJob }));
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
+    res.locals.auditRecordId = jobCost.jobCostId;
     res.status(201).json(jobCost);
   } catch (error) {
     const statusCode = Number((error as { statusCode?: number })?.statusCode) || ((error as { code?: string })?.code === 'P2034' ? 409 : 0);

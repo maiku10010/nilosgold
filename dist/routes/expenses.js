@@ -23,6 +23,7 @@ router.post('/', async (req, res) => {
                 ...(date ? { expDate: new Date(date) } : {})
             }
         });
+        res.locals.auditRecordId = newExpense.expenseId;
         res.json(newExpense);
     }
     catch (error) {
