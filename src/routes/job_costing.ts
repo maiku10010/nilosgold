@@ -1,4 +1,4 @@
-import { validateServiceFields } from '../lib/serviceRules';
+import { stripDisallowedFields, validateServiceFields, ServiceType } from '../lib/serviceRules';
 import { roundTwo } from '../rounding';
 import { Request, Response, Router } from 'express';
 import { Prisma } from '@prisma/client';
@@ -22,18 +22,19 @@ const withJobSaleTotals = <T extends { sales: any }>(job: T) => job.sales ? { ..
 router.post('/', async (req: Request, res: Response) => {
   try {
     const { inquiryId, clientName, contactNum, empId, serviceType, itemName, deadline, deliveryDate } = req.body;
+    const payload = stripDisallowedFields(serviceType, req.body);
     const rules = validateServiceFields(serviceType, req.body);
     const requestedDeadline = deadline ?? deliveryDate;
     if (itemName !== undefined && itemName !== null && (typeof itemName !== 'string' || itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
     if (requestedDeadline !== undefined && requestedDeadline !== null && !isTodayOrFutureDate(requestedDeadline)) return res.status(400).json({ error: 'Delivery date must be today or later.' });
-    const goldUsed = goldWeight(req.body.goldUsed);
-    const goldScrap = goldWeight(req.body.goldScrap ?? 0);
-    const goldCostPerG = roundTwo(req.body.goldCostPerG ?? 0);
-    const stoneCost = roundTwo(req.body.stoneCost ?? 0);
-    const laborCost = roundTwo(req.body.laborCost);
-    const laborCharge = roundTwo(req.body.laborCharge ?? 0);
-    const otherCost = roundTwo(req.body.otherCost ?? 0);
-    const sellingPrice = roundTwo(req.body.sellingPrice);
+    const goldUsed = goldWeight(payload.goldUsed);
+    const goldScrap = goldWeight(payload.goldScrap ?? 0);
+    const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);
+    const stoneCost = roundTwo(payload.stoneCost ?? 0);
+    const laborCost = roundTwo(payload.laborCost);
+    const laborCharge = roundTwo(payload.laborCharge ?? 0);
+    const otherCost = roundTwo(payload.otherCost ?? 0);
+    const sellingPrice = roundTwo(payload.sellingPrice);
 
     if (typeof inquiryId !== 'string' || !inquiryId || typeof clientName !== 'string' || !clientName.trim()) {
       return res.status(400).json({ error: 'Choose a pending inquiry and confirm the client name.' });
@@ -85,12 +86,12 @@ router.post('/', async (req: Request, res: Response) => {
           universalReferenceId: inquiry.universalReferenceId ?? inquiry.inquiryId,
           itemName: typeof itemName === 'string' && itemName.trim() ? itemName.trim() : null,
           ...(requestedDeadline ? { deadline: new Date(`${requestedDeadline}T00:00:00Z`) } : {}),
-          goldUsed,
-          goldScrap,
-          goldCostPerG,
-          stoneCost,
-          laborCost,
-          laborCharge,
+          goldUsed: rules.gold ? goldUsed : null,
+          goldScrap: rules.scrap ? goldScrap : null,
+          goldCostPerG: rules.gold ? goldCostPerG : null,
+          stoneCost: rules.stone ? stoneCost : null,
+          laborCost: rules.labor ? laborCost : null,
+          laborCharge: rules.labor ? laborCharge : null,
           otherCost,
           status: 'PENDING',
           employee: { connect: { empId: employee.empId } },
@@ -98,7 +99,7 @@ router.post('/', async (req: Request, res: Response) => {
           inquiry: { connect: { inquiryId } },
         },
       });
-      if (rules.gold) await syncGoldAllocation(tx, { goldSourceId: req.body.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId: createdJob.jobCostId, universalReferenceId: createdJob.universalReferenceId });
+      if (rules.gold) await syncGoldAllocation(tx, { goldSourceId: payload.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId: createdJob.jobCostId, universalReferenceId: createdJob.universalReferenceId });
       await validateInventoryLedger(tx);
       const sale = await tx.sales.create({
         data: {
@@ -183,20 +184,9 @@ router.post('/:jobCostId/ready', async (req: Request, res: Response) => {
 router.put('/:jobCostId', async (req: Request, res: Response) => {
   try {
     const jobCostId = Array.isArray(req.params.jobCostId) ? req.params.jobCostId[0] : req.params.jobCostId;
-    const goldUsed = goldWeight(req.body.goldUsed);
-    const goldScrap = goldWeight(req.body.goldScrap ?? 0);
-    const goldCostPerG = roundTwo(req.body.goldCostPerG ?? 0);
-    const stoneCost = roundTwo(req.body.stoneCost ?? 0);
-    const laborCost = roundTwo(req.body.laborCost);
-    const laborCharge = roundTwo(req.body.laborCharge ?? 0);
-    const otherCost = roundTwo(req.body.otherCost ?? 0);
-    const sellingPrice = roundTwo(req.body.sellingPrice);
     const requestedDeadline = req.body.deadline ?? req.body.deliveryDate;
     if (req.body.itemName !== undefined && req.body.itemName !== null && (typeof req.body.itemName !== 'string' || req.body.itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
     if (requestedDeadline !== undefined && requestedDeadline !== null && requestedDeadline !== '' && !isTodayOrFutureDate(requestedDeadline)) return res.status(400).json({ error: 'Delivery date must be today or later.' });
-    if (![stoneCost, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || !isNonNegativeNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
-      return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
-    }
     if (typeof req.body.invoiceId !== 'string' || typeof req.body.clientName !== 'string') {
       return res.status(400).json({ error: 'The invoice number and client name are required to update job costing.' });
     }
@@ -205,10 +195,23 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       const existing = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { sales: { include: { client: true } } } });
       if (!existing) throw Object.assign(new Error('Job costing record not found.'), { statusCode: 404 });
       if (!existing.sales) throw Object.assign(new Error('This costing has no linked invoice.'), { statusCode: 409 });
+      const payload = stripDisallowedFields(existing.sales.serviceType as ServiceType, req.body);
       const rules = validateServiceFields(existing.sales.serviceType, req.body);
+      const goldUsed = goldWeight(payload.goldUsed);
+      const goldScrap = goldWeight(payload.goldScrap ?? 0);
+      const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);
+      const stoneCost = roundTwo(payload.stoneCost ?? 0);
+      const laborCost = roundTwo(payload.laborCost);
+      const laborCharge = roundTwo(payload.laborCharge ?? 0);
+      const otherCost = roundTwo(payload.otherCost ?? 0);
+      const sellingPrice = roundTwo(payload.sellingPrice);
+      if (![stoneCost, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || !isNonNegativeNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
+        throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
+      }
+
       if (rules.gold && !isPositiveNumber(goldCostPerG)) throw Object.assign(new Error('Enter a gold price greater than zero.'), { statusCode: 400 });
       if (!rules.gold) await releaseGoldAllocation(tx, jobCostId);
-      if (rules.gold) await syncGoldAllocation(tx, { goldSourceId: req.body.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId, universalReferenceId: existing.universalReferenceId });
+      if (rules.gold) await syncGoldAllocation(tx, { goldSourceId: payload.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId, universalReferenceId: existing.universalReferenceId });
       await validateInventoryLedger(tx);
       const namesMatch = existing.sales.client.clientName.trim().toLocaleLowerCase() === req.body.clientName.trim().toLocaleLowerCase();
       if (existing.sales.invoiceId !== req.body.invoiceId || !namesMatch) {
@@ -222,12 +225,12 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       await tx.job_Cost.update({
         where: { jobCostId },
         data: {
-          goldUsed,
-          goldScrap,
-          goldCostPerG,
-          stoneCost,
-          laborCost,
-          laborCharge,
+          goldUsed: rules.gold ? goldUsed : null,
+          goldScrap: rules.scrap ? goldScrap : null,
+          goldCostPerG: rules.gold ? goldCostPerG : null,
+          stoneCost: rules.stone ? stoneCost : null,
+          laborCost: rules.labor ? laborCost : null,
+          laborCharge: rules.labor ? laborCharge : null,
           otherCost,
           ...(req.body.itemName !== undefined ? { itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : null } : {}),
           ...(requestedDeadline !== undefined ? { deadline: requestedDeadline ? new Date(`${requestedDeadline}T00:00:00Z`) : null } : {}),

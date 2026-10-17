@@ -53,8 +53,9 @@ async function findCurrent(entity, id) {
 const numericFields = new Set(['price', 'payment', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'quantityIn', 'quantityOut', 'quantityLoss', 'unitPrice']);
 const positiveFields = new Set(['price', 'goldCostPerG', 'sellingPrice', 'amount', 'unitPrice']);
 const nullableStringFields = new Set(['contactInfo', 'email', 'details', 'description', 'contactNum']);
-function normalizedChanges(body, spec) {
+function normalizedChanges(body, spec, serviceType) {
     const changes = {};
+    const notApplicable = serviceType ? (0, serviceRules_1.stripDisallowedFields)(serviceType, {}) : {};
     for (const [key, raw] of Object.entries(body)) {
         if (!spec.allowed.has(key)) {
             if (spec.context.has(key))
@@ -63,6 +64,10 @@ function normalizedChanges(body, spec) {
         }
         if (raw === undefined)
             continue;
+        if (raw === null && Object.hasOwn(notApplicable, key)) {
+            changes[key] = null;
+            continue;
+        }
         if (spec.entity === 'JOB_COST' && ['goldUsed', 'goldScrap'].includes(key)) {
             changes[key] = (0, goldAllocation_1.goldWeight)(raw).toString();
             continue;
@@ -146,9 +151,11 @@ async function queueStaffChanges(req, res, next) {
         let proposedData = null;
         if (action === 'UPDATE') {
             try {
+                const type = spec.entity === 'JOB_COST' ? current.sales?.serviceType : undefined;
+                const payload = type ? (0, serviceRules_1.stripDisallowedFields)(type, req.body ?? {}) : req.body ?? {};
                 if (spec.entity === 'JOB_COST')
-                    (0, serviceRules_1.validateServiceFields)(current.sales?.serviceType, req.body ?? {});
-                proposedData = normalizedChanges(req.body ?? {}, spec);
+                    (0, serviceRules_1.validateServiceFields)(type, req.body ?? {});
+                proposedData = normalizedChanges(payload, spec, type);
             }
             catch (error) {
                 res.status(400).json({ error: error.message });
@@ -229,12 +236,13 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
             const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { sales: true } });
             if (!job)
                 throw new Error('Job costing is no longer active.');
+            const payload = goldRestoreSnapshot ? changes : (0, serviceRules_1.stripDisallowedFields)(job.sales?.serviceType, changes);
             const rules = goldRestoreSnapshot ? (0, serviceRules_1.serviceRules)(job.sales?.serviceType) : (0, serviceRules_1.validateServiceFields)(job.sales?.serviceType, changes);
-            const { sellingPrice, ...jobFields } = changes;
+            const { sellingPrice, ...jobFields } = payload;
             await tx.job_Cost.update({ where: { jobCostId: id }, data: {
-                    ...(jobFields.goldUsed !== undefined ? { goldUsed: (0, goldAllocation_1.goldWeight)(jobFields.goldUsed) } : {}),
-                    ...(jobFields.goldScrap !== undefined ? { goldScrap: (0, goldAllocation_1.goldWeight)(jobFields.goldScrap) } : {}),
-                    ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
+                    ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed === null ? null : (0, goldAllocation_1.goldWeight)(jobFields.goldUsed) } : {}),
+                    ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap === null ? null : (0, goldAllocation_1.goldWeight)(jobFields.goldScrap) } : {}),
+                    ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: jobFields.goldCostPerG === null ? null : Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
                     ...(jobFields.stoneCost !== undefined ? { stoneCost: jobFields.stoneCost } : {}),
                     ...(jobFields.laborCost !== undefined ? { laborCost: jobFields.laborCost } : {}),
                     ...(jobFields.laborCharge !== undefined ? { laborCharge: jobFields.laborCharge } : {}),
@@ -256,7 +264,6 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
             }
             else if (!rules.gold) {
                 await (0, goldAllocation_1.releaseGoldAllocation)(tx, id);
-                await tx.job_Cost.update({ where: { jobCostId: id }, data: { goldUsed: 0, goldScrap: 0, goldCostPerG: 0, stoneCost: 0 } });
             }
             else {
                 const source = jobFields.goldSourceId ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
@@ -389,7 +396,7 @@ async function undoApprovedRequest(tx, request) {
     const before = (request.beforeData ?? {});
     if (request.action === 'UPDATE') {
         const proposed = (request.proposedData ?? {});
-        const restore = Object.fromEntries(Object.keys(proposed).map(key => [key, before[key] ?? before.client?.[key]]));
+        const restore = Object.fromEntries(Object.keys(proposed).map(key => [key, Object.hasOwn(before, key) ? before[key] : before.client?.[key]]));
         await applyUpdate(tx, { ...request, proposedData: restore }, restore, request.entityType === 'JOB_COST' ? before : undefined);
         return;
     }

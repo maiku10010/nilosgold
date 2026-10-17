@@ -14,13 +14,13 @@ export function serviceRules(serviceType: unknown) {
 }
 
 const fields = { gold: ['goldSourceId', 'goldUsed', 'goldCostPerG'], stone: ['stoneCost'], scrap: ['goldScrap'], labor: ['laborCost', 'laborCharge'] } as const;
-// Disabled fields must be omitted, even if they contain zero or a stale value.
+// Disabled fields accept only null or omission; zero is still an applicable value.
 export function validateServiceFields(serviceType: unknown, payload: Record<string, unknown>) {
   const rules = serviceRules(serviceType);
   for (const key of Object.keys(fields) as Array<keyof typeof fields>) {
     if (rules[key]) continue;
     for (const field of fields[key]) {
-      if (Object.hasOwn(payload, field)) throw Object.assign(new Error(`${field} is not allowed for ${serviceType}.`), { statusCode: 400, field });
+      if (payload[field] !== undefined && payload[field] !== null) throw Object.assign(new Error(`${field} is not allowed for ${serviceType}.`), { statusCode: 400, field });
     }
   }
   return rules;

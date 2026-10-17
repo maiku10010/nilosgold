@@ -221,7 +221,7 @@ test('costing API rejects disabled fields with 400 and permits labor-only Cleani
   prisma.sales = { create: async ({ data }) => data };
   const router = require('../dist/routes/job_costing').default;
   const create = router.stack.find(layer => layer.route?.path === '/' && layer.route?.methods.post).route.stack[0].handle;
-  const base = { inquiryId: 'INQ-1', clientName: 'Mia', serviceType: 'Cleaning', laborCost: 1000, sellingPrice: 1500 };
+  const base = { inquiryId: 'INQ-1', clientName: 'Mia', serviceType: 'Cleaning', goldUsed: null, goldScrap: null, goldSourceId: null, goldCostPerG: null, stoneCost: null, laborCost: 1000, sellingPrice: 1500 };
   for (const fields of [{ goldUsed: 1 }, { goldSourceId: '18K-IN' }, { goldScrap: '.2' }, { stoneCost: 0 }]) {
     const result = response(); result.locals = {};
     await create({ body: { ...base, ...fields } }, result);
@@ -281,4 +281,60 @@ test('staff and direct edits validate the stored service type rather than a spoo
   await edit({ params: { jobCostId: 'JOB-1' }, body: { invoiceId: 'INV-1', clientName: 'Mia', serviceType: 'Repair', goldUsed: 1, goldCostPerG: 8000, laborCost: 1000, sellingPrice: 15000 } }, result);
   assert.equal(result.statusCode, 400);
   assert.equal(tx.rows.length, 1);
+});
+
+
+test('direct Resize edits store stone cost as null and preserve measured-zero labor and scrap', async () => {
+  const tx = database([source()]);
+  tx.job.sales = { ...tx.job.sales, serviceType: 'Resize', client: { clientName: 'Mia' } };
+  Object.assign(prisma, tx);
+  prisma.$transaction = async (fn, options) => { assert.equal(options.isolationLevel, 'Serializable'); return fn(prisma); };
+  prisma.job_Cost.findUniqueOrThrow = async () => tx.job;
+  prisma.sales = { update: async () => ({}) };
+  const router = require('../dist/routes/job_costing').default;
+  const edit = router.stack.find(layer => layer.route?.methods.put).route.stack[0].handle;
+  const result = response();
+  await edit({ params: { jobCostId: 'JOB-1' }, body: { invoiceId: 'INV-1', clientName: 'Mia', goldSourceId: '18K-IN', goldUsed: '1', goldScrap: '0', goldCostPerG: 8000, stoneCost: null, laborCost: 0, sellingPrice: 15000 } }, result);
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body.stoneCost, null);
+  assert.equal(result.body.laborCost, 0);
+  assert.equal(result.body.goldScrap.toString(), '0');
+});
+
+test('Cleaning staff edits retain nulls through approval and undo and reject forbidden values', async () => {
+  const tx = database([source()]);
+  Object.assign(tx.job, { goldUsed: null, goldScrap: null, goldCostPerG: null, stoneCost: null, laborCost: 1000, goldKarat: null, inventoryMovement: [] });
+  tx.job.sales.serviceType = 'Cleaning';
+  Object.assign(prisma, tx);
+  let queued;
+  prisma.approvalRequest = {
+    findFirst: async () => null,
+    create: async ({ data }) => (queued = { ...data, requestId: 'APP-NULL', status: 'PENDING' }),
+    findUnique: async () => queued,
+    update: async ({ data }) => (queued = { ...queued, ...data }),
+  };
+  prisma.systemLog = { create: async () => ({}) };
+  prisma.$transaction = async fn => fn(prisma);
+  const staff = { empId: 'STAFF', empRole: 'Staff' };
+  for (const value of [0, '0', 100, '']) {
+    const rejected = response();
+    await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: staff, body: { stoneCost: value } }, rejected, () => assert.fail('must reject'));
+    assert.equal(rejected.statusCode, 400);
+  }
+  const pending = response();
+  await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: staff, body: { goldUsed: null, goldScrap: null, goldCostPerG: null, goldSourceId: null, stoneCost: null, laborCost: 1200 } }, pending, () => assert.fail('must queue'));
+  assert.equal(pending.statusCode, 202);
+  assert.equal(queued.proposedData.goldCostPerG, null);
+  assert.equal(queued.proposedData.stoneCost, null);
+  const user = { empId: 'ADMIN', empRole: 'Admin', empName: 'Admin' };
+  const approved = response();
+  await approve({ params: { requestId: 'APP-NULL' }, body: {}, user }, approved);
+  assert.equal(approved.statusCode, 200);
+  assert.equal(tx.job.laborCost, 1200);
+  for (const key of ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost']) assert.equal(tx.job[key], null);
+  const restored = response();
+  await undo({ params: { requestId: 'APP-NULL' }, user }, restored);
+  assert.equal(restored.statusCode, 200);
+  assert.equal(tx.job.laborCost, 1000);
+  for (const key of ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost']) assert.equal(tx.job[key], null);
 });

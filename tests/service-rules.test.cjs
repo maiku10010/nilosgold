@@ -15,10 +15,11 @@ for (const [type, expected] of Object.entries(cases)) {
     assert.equal(validateServiceFields(type, accepted), SERVICE_RULES[type]);
     for (const key of Object.keys(all)) {
       if (expected.fields.includes(key)) continue;
-      for (const value of [all[key], 0, null]) {
+      for (const value of [all[key], 0, "0", "", false]) {
         assert.throws(() => validateServiceFields(type, { ...accepted, [key]: value }), error => error.statusCode === 400 && error.field === key);
       }
     }
+    assert.doesNotThrow(() => validateServiceFields(type, stripDisallowedFields(type, accepted)));
     assert.equal(serviceCost(type, all).toString(), expected.total);
   });
 }
@@ -53,4 +54,9 @@ test('helpers reject unknown services instead of silently allowing fields', () =
     assert.throws(() => getAllowedFields(type), error => error.statusCode === 400);
     assert.throws(() => stripDisallowedFields(type, {}), error => error.statusCode === 400);
   }
+});
+
+test('null costs never contribute to totals, while applicable zero costs remain valid', () => {
+  assert.equal(serviceCost('Cleaning', { goldUsed: null, goldScrap: null, goldCostPerG: null, stoneCost: null, laborCost: 1000 }).toString(), '1000');
+  assert.equal(serviceCost('Resize', { goldUsed: '1', goldScrap: '0', goldCostPerG: 8000, stoneCost: null, laborCost: 0 }).toString(), '8000');
 });
