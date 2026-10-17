@@ -8,6 +8,7 @@ const salesRouter = require('../dist/routes/sales').default;
 const approvals = require('../dist/approvals');
 const receipt = salesRouter.stack.find(layer => layer.route?.path === '/:invoiceId/receipt').route.stack[0].handle;
 const updateSale = salesRouter.stack.find(layer => layer.route?.methods.put).route.stack[0].handle;
+const saleLastUpdate = salesRouter.stack.find(layer => layer.route?.path === '/:invoiceId/last-update').route.stack[0].handle;
 const approve = approvals.default.stack.find(layer => layer.route?.path === '/:requestId/approve').route.stack[0].handle;
 const undoApproval = approvals.default.stack.find(layer => layer.route?.path === '/:requestId/undo').route.stack[0].handle;
 const originalFetch = global.fetch;
@@ -163,4 +164,36 @@ test('an approving admin can undo an email edit during the five-second window', 
   assert.equal(response.statusCode, 200);
   assert.equal(sale.client.email, 'customer@example.com');
   assert.equal(response.body.request.status, 'REJECTED');
+});
+
+test('sale update footer reads only the targeted invoice edit metadata, including for staff', async () => {
+  let logQuery;
+  const stamp = new Date('2026-10-18T02:00:00Z');
+  prisma.systemLog.findFirst = async query => {
+    logQuery = query;
+    return { actorRole: 'Admin', createdAt: stamp };
+  };
+  const response = res();
+  await saleLastUpdate({ params: { invoiceId: 'INV-1' }, user: { empRole: 'Staff' } }, response);
+  assert.deepEqual(response.body, { lastUpdate: { actorRole: 'Admin', createdAt: stamp } });
+  assert.equal(logQuery.where.entityType, 'SALE');
+  assert.equal(logQuery.where.entityId, 'INV-1');
+  assert.deepEqual(logQuery.select, { actorRole: true, createdAt: true });
+  assert.deepEqual(logQuery.orderBy, { createdAt: 'desc' });
+  assert.equal(logQuery.where.action.in.includes('PUT_REQUESTED'), false);
+  assert.equal(logQuery.where.action.in.includes('APPROVAL_APPROVED'), true);
+  prisma.systemLog.findFirst = async () => null;
+  const empty = res();
+  await saleLastUpdate({ params: { invoiceId: 'INV-1' } }, empty);
+  assert.deepEqual(empty.body, { lastUpdate: null });
+});
+
+test('sale update footer does not disclose logs for missing or archived invoices', async () => {
+  prisma.systemLog.findFirst = async () => assert.fail('No history query for missing invoices');
+  for (const missing of [null, { ...sale, deletedAt: new Date() }]) {
+    sale = missing;
+    const response = res();
+    await saleLastUpdate({ params: { invoiceId: 'INV-1' } }, response);
+    assert.equal(response.statusCode, 404);
+  }
 });

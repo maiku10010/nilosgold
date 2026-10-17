@@ -26,6 +26,23 @@ router.get('/', async (_req: Request, res: Response) => {
   }
 });
 
+router.get('/:invoiceId/last-update', async (req: Request, res: Response) => {
+  try {
+    const invoiceId = Array.isArray(req.params.invoiceId) ? req.params.invoiceId[0] : req.params.invoiceId;
+    const sale = await prisma.sales.findFirst({ where: { invoiceId, deletedAt: null }, select: { invoiceId: true } });
+    if (!sale) return res.status(404).json({ error: 'Invoice not found.' });
+    const lastUpdate = await prisma.systemLog.findFirst({
+      where: { entityType: 'SALE', entityId: invoiceId, action: { in: ['PUT', 'PATCH', 'APPROVAL_APPROVED', 'APPROVAL_UNDONE'] } },
+      select: { actorRole: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json({ lastUpdate });
+  } catch (error) {
+    console.error('Error reading sale update history:', error);
+    res.status(500).json({ error: 'Last update unavailable.' });
+  }
+});
+
 router.post('/:invoiceId/finish', async (req: Request, res: Response) => {
   try {
     const invoiceId = Array.isArray(req.params.invoiceId) ? req.params.invoiceId[0] : req.params.invoiceId;
