@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SERVICE_RULES = void 0;
 exports.serviceRules = serviceRules;
 exports.validateServiceFields = validateServiceFields;
+exports.getAllowedFields = getAllowedFields;
+exports.stripDisallowedFields = stripDisallowedFields;
 exports.SERVICE_RULES = {
     Repair: { gold: true, stone: true, scrap: true, labor: true },
     Custom: { gold: true, stone: true, scrap: true, labor: true },
@@ -28,4 +30,21 @@ function validateServiceFields(serviceType, payload) {
         }
     }
     return rules;
+}
+/** Concrete costing payload keys enabled for this service. */
+function getAllowedFields(serviceType) {
+    const rules = serviceRules(serviceType);
+    return Object.keys(fields).flatMap(key => rules[key] ? [...fields[key]] : []);
+}
+/** Return a copy, clearing every disabled costing field without changing other data. */
+function stripDisallowedFields(serviceType, payload) {
+    const rules = serviceRules(serviceType);
+    const result = { ...payload };
+    for (const key of Object.keys(fields)) {
+        if (rules[key])
+            continue;
+        for (const field of fields[key])
+            result[field] = null;
+    }
+    return result;
 }

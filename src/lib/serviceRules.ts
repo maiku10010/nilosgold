@@ -25,3 +25,20 @@ export function validateServiceFields(serviceType: unknown, payload: Record<stri
   }
   return rules;
 }
+
+/** Concrete costing payload keys enabled for this service. */
+export function getAllowedFields(serviceType: ServiceType) {
+  const rules = serviceRules(serviceType);
+  return (Object.keys(fields) as Array<keyof typeof fields>).flatMap(key => rules[key] ? [...fields[key]] : []);
+}
+
+/** Return a copy, clearing every disabled costing field without changing other data. */
+export function stripDisallowedFields(serviceType: ServiceType, payload: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const rules = serviceRules(serviceType);
+  const result = { ...payload };
+  for (const key of Object.keys(fields) as Array<keyof typeof fields>) {
+    if (rules[key]) continue;
+    for (const field of fields[key]) result[field] = null;
+  }
+  return result;
+}
