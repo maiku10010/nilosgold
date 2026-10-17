@@ -11,8 +11,8 @@ type InventoryMovement = {
   quantityLoss: number | Prisma.Decimal;
 };
 
-const movementKey = (row: InventoryMovement) => row.category === 'GOLD'
-  ? `GOLD:${row.goldKarat ?? 'unknown'}:grams`
+const movementKey = (row: InventoryMovement) => ['GOLD', 'SCRAP'].includes(row.category)
+  ? `${row.category}:${row.goldKarat ?? 'unknown'}:grams`
   : `${row.category}:${row.unit}:${row.itemName.trim().toLowerCase()}`;
 const movementFactor = (row: InventoryMovement) => new Prisma.Decimal(row.category === 'GOLD' && row.unit === 'troy oz' ? '31.1034768' : '1');
 

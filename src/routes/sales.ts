@@ -71,7 +71,7 @@ router.post('/:invoiceId/finish', async (req: Request, res: Response) => {
       for (const item of materials) deductions.set(item.referenceId, (deductions.get(item.referenceId) ?? 0) + Number(item.quantity));
       for (const [referenceId, quantity] of deductions) {
         const stock = await tx.inventory.findFirst({ where: { referenceId, deletedAt: null } });
-        if (!stock || stock.category === 'GOLD' || stock.category === 'TOOLS') throw Object.assign(new Error('Choose an active packaging or material inventory item.'), { statusCode: 400 });
+        if (!stock || stock.category === 'GOLD' || stock.category === 'SCRAP' || stock.category === 'TOOLS') throw Object.assign(new Error('Choose an active packaging or material inventory item.'), { statusCode: 400 });
         await tx.inventory.create({ data: {
           referenceId: friendlyId(), universalReferenceId: current.job.universalReferenceId,
           jobCostId: current.job.jobCostId, itemName: stock.itemName, category: stock.category, unit: stock.unit,

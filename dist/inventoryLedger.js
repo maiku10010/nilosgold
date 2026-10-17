@@ -3,8 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.calculateInventoryBalances = calculateInventoryBalances;
 exports.validateInventoryLedger = validateInventoryLedger;
 const client_1 = require("@prisma/client");
-const movementKey = (row) => row.category === 'GOLD'
-    ? `GOLD:${row.goldKarat ?? 'unknown'}:grams`
+const movementKey = (row) => ['GOLD', 'SCRAP'].includes(row.category)
+    ? `${row.category}:${row.goldKarat ?? 'unknown'}:grams`
     : `${row.category}:${row.unit}:${row.itemName.trim().toLowerCase()}`;
 const movementFactor = (row) => new client_1.Prisma.Decimal(row.category === 'GOLD' && row.unit === 'troy oz' ? '31.1034768' : '1');
 function calculateInventoryBalances(rows) {

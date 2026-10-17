@@ -47,6 +47,28 @@ export async function syncGoldAllocation(tx: Prisma.TransactionClient, input: {
   else if (!required.isZero()) await tx.inventory.create({ data: {
     ...data, referenceId: friendlyId(), universalReferenceId: input.universalReferenceId, jobCostId: input.jobCostId,
   } });
+  // Recovered scrap is a separate stock pool, never usable gold stock.
+  await syncScrapRecovery(tx, input.jobCostId, source.goldKarat, input.goldScrap);
   await tx.job_Cost.update({ where: { jobCostId: input.jobCostId }, data: { goldKarat: source.goldKarat } });
   return source.goldKarat;
+}
+
+export async function syncScrapRecovery(tx: Prisma.TransactionClient, jobCostId: string, karat: number, quantity: Prisma.Decimal) {
+  const movements = await tx.inventory.findMany({ where: { jobCostId, category: 'SCRAP' } });
+  const current = movements[0];
+  if (movements.length > 1) await tx.inventory.updateMany({ where: { referenceId: { in: movements.slice(1).map(row => row.referenceId) } }, data: { deletedAt: new Date() } });
+  const data = {
+    itemName: 'Scrap gold', category: 'SCRAP' as const, unit: 'grams', goldKarat: karat,
+    universalReferenceId: jobCostId, quantityIn: quantity, quantityOut: new Prisma.Decimal(0),
+    quantityLoss: new Prisma.Decimal(0), unitPrice: 0, deletedAt: quantity.isZero() ? new Date() : null,
+  };
+  if (current) await tx.inventory.update({ where: { referenceId: current.referenceId }, data });
+  else if (!quantity.isZero()) await tx.inventory.create({ data: { ...data, referenceId: friendlyId(), jobCostId } });
+}
+
+export async function releaseGoldAllocation(tx: Prisma.TransactionClient, jobCostId: string) {
+  for (const category of ['GOLD', 'SCRAP'] as const) {
+    await tx.inventory.updateMany({ where: { jobCostId, category }, data: { deletedAt: new Date() } });
+  }
+  await tx.job_Cost.update({ where: { jobCostId }, data: { goldKarat: null } });
 }

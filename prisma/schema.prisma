@@ -43,6 +43,7 @@ enum ApprovalStatus {
 enum InventoryCategory {
   GOLD
   SILVER
+  SCRAP
   GEMSTONES
   BOXES
   PACKAGING
@@ -186,7 +187,7 @@ model Inventory {
   unit        String
   unitPrice   Decimal   @default(0.00)
   category    InventoryCategory @default(GOLD)
-  /// Only GOLD may have a karat; NULL preserves unknown historical purity.
+  /// GOLD and SCRAP may have a karat; NULL preserves unknown historical purity.
   goldKarat   Int? @db.SmallInt @map("gold_karat")
   sourceSheet String? @map("source_sheet")
   sourceRow Int? @map("source_row")

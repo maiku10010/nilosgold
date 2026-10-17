@@ -1,6 +1,6 @@
+import { serviceCost } from '../serviceCost';
 import { Request, Response, Router } from 'express';
 import { prisma } from '../db';
-import { goldMaterialCost } from '../goldAllocation';
 
 const router = Router();
 router.get('/', async (req: Request, res: Response) => {
@@ -20,7 +20,7 @@ router.get('/', async (req: Request, res: Response) => {
     const revenue = sales.reduce((sum, sale) => sum + Number(sale.price), 0);
     const jobCost = sales.reduce((sum, sale) => {
       if (!sale.job || sale.job.deletedAt) return sum;
-      return sum + goldMaterialCost(sale.job.goldUsed, sale.job.goldScrap, sale.job.goldCostPerG).toNumber() + Number(sale.job.stoneCost) + Number(sale.job.laborCost) + Number(sale.job.otherCost);
+      return sum + serviceCost(sale.serviceType, sale.job).toNumber();
     }, 0);
     const operatingExpenses = Number(expenses._sum.amount ?? 0);
     res.json({ start: start.toISOString(), end: end.toISOString(), revenue, jobCost, grossProfit: revenue - jobCost, expenses: operatingExpenses, netProfit: revenue - jobCost - operatingExpenses, netMargin: revenue ? ((revenue - jobCost - operatingExpenses) / revenue) * 100 : 0, inquiries, salesCount: sales.length });

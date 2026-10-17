@@ -6,9 +6,9 @@ import { friendlyId } from '../friendlyId';
 import { calculateInventoryBalances, validateInventoryLedger } from '../inventoryLedger';
 
 const router = Router();
-const categories = ['GOLD', 'SILVER', 'GEMSTONES', 'BOXES', 'PACKAGING', 'FINDINGS', 'TOOLS'] as const;
+const categories = ['GOLD', 'SCRAP', 'SILVER', 'GEMSTONES', 'BOXES', 'PACKAGING', 'FINDINGS', 'TOOLS'] as const;
 const unitsByCategory: Record<string, string[]> = {
-  GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'],
+  SCRAP: ['grams'], GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'],
   BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'],
 };
 type Movement = { category: typeof categories[number]; itemName: string; unit: string; goldKarat: number | null; quantityIn: number; quantityOut: number; quantityLoss: number; unitPrice: number; date?: Date };
@@ -27,10 +27,10 @@ function parseMovement(body: any, existing?: { category: string; itemName: strin
   if (![quantityIn, quantityOut, quantityLoss].every(isNonNegativeNumber) || Number(quantityIn) + Number(quantityOut) + Number(quantityLoss) <= 0) return 'Enter a positive quantity for at least one movement.';
   if (!isPositiveNumber(unitPrice)) return 'Unit price must be greater than zero.';
   if (category === 'GOLD' && goldKarat === null && !existing) return 'Choose a gold karat from 10K to 24K.';
-  if (category === 'GOLD' && goldKarat !== null && (!Number.isInteger(goldKarat) || goldKarat < 10 || goldKarat > 24)) return 'Gold karat must be a whole number from 10K to 24K.';
-  if (category !== 'GOLD' && goldKarat !== null) return 'Karat can only be set for gold inventory.';
+  if (['GOLD', 'SCRAP'].includes(category) && goldKarat !== null && (!Number.isInteger(goldKarat) || goldKarat < 10 || goldKarat > 24)) return 'Gold karat must be a whole number from 10K to 24K.';
+  if (!['GOLD', 'SCRAP'].includes(category) && goldKarat !== null) return 'Karat can only be set for gold or scrap inventory.';
   if (body.date !== undefined && !isValidNonFutureDate(body.date)) return 'Inventory date must be a valid date no later than today.';
-  return { category: category as Movement['category'], itemName, unit, goldKarat: category === 'GOLD' ? goldKarat : null, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
+  return { category: category as Movement['category'], itemName, unit, goldKarat: ['GOLD', 'SCRAP'].includes(category) ? goldKarat : null, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
 }
 
 router.post('/', async (req: Request, res: Response) => {
@@ -75,6 +75,7 @@ router.put('/:referenceId', async (req: Request, res: Response) => {
     const targetId = Array.isArray(req.params.referenceId) ? req.params.referenceId[0] : req.params.referenceId;
     const existing = await prisma.inventory.findFirst({ where: { referenceId: targetId, deletedAt: null } });
     if (!existing) return res.status(404).json({ error: 'Inventory entry not found or already archived.' });
+    if (existing.jobCostId && ['GOLD', 'SCRAP'].includes(existing.category)) return res.status(409).json({ error: 'Edit the linked job costing to adjust this automatic movement.' });
     const parsed = parseMovement(req.body, existing);
     if (typeof parsed === 'string') return res.status(400).json({ error: parsed });
     const saved = await prisma.$transaction(async tx => {
@@ -99,6 +100,8 @@ router.delete('/:referenceId', async (req: Request, res: Response) => {
   try {
     const targetId = Array.isArray(req.params.referenceId) ? req.params.referenceId[0] : req.params.referenceId;
     const deleted = await prisma.$transaction(async tx => {
+      const existing = await tx.inventory.findFirst({ where: { referenceId: targetId, deletedAt: null } });
+      if (existing?.jobCostId && ['GOLD', 'SCRAP'].includes(existing.category)) throw Object.assign(new Error('Delete or edit the linked job costing to adjust this automatic movement.'), { statusCode: 409 });
       const result = await tx.inventory.updateMany({ where: { referenceId: targetId, deletedAt: null }, data: { deletedAt: new Date() } });
       if (!result.count) return 0;
       await validateInventoryLedger(tx);

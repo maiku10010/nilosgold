@@ -1,3 +1,4 @@
+import { serviceRules, validateServiceFields } from './lib/serviceRules';
 import { roundTwo } from './rounding';
 import { NextFunction, Request, Response, Router } from 'express';
 import { Prisma } from '@prisma/client';
@@ -9,7 +10,7 @@ import { friendlyId } from './friendlyId';
 import { isTodayOrFutureDate, isValidPHContact } from './validation';
 import { InventoryCategory } from '@prisma/client';
 import { paidTotal, setSalePaidTotal } from './accounting';
-import { goldWeight, syncGoldAllocation } from './goldAllocation';
+import { goldWeight, syncGoldAllocation, releaseGoldAllocation } from './goldAllocation';
 
 type Entity = 'SALE' | 'JOB_COST' | 'INQUIRY' | 'EXPENSE' | 'INVENTORY' | 'CLIENT';
 type Action = 'UPDATE' | 'DELETE';
@@ -40,9 +41,9 @@ function json(value: unknown): Prisma.InputJsonValue {
 
 async function findCurrent(entity: Entity, id: string): Promise<any> {
   switch (entity) {
-    case 'SALE': return prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true, payments: true } });
+    case 'SALE': return prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true, payments: true, job: { include: { inventoryMovement: true } } } });
     case 'JOB_COST': {
-      const job = await prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } }, inventoryMovement: { where: { category: 'GOLD' } } } });
+      const job = await prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } }, inventoryMovement: true } });
       if (!job) return null;
       const source = await prisma.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
       return { ...job, goldSourceId: source?.referenceId ?? null };
@@ -112,14 +113,15 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
   try {
     const current = await findCurrent(spec.entity, spec.id);
     if (!current) { res.status(404).json({ error: 'Record was not found or is already archived.' }); return; }
+    if (spec.entity === 'INVENTORY' && current.jobCostId && ['GOLD', 'SCRAP'].includes(current.category)) { res.status(409).json({ error: 'Edit the linked job costing to adjust this automatic movement.' }); return; }
     let proposedData: Record<string, unknown> | null = null;
     if (action === 'UPDATE') {
-      try { proposedData = normalizedChanges(req.body ?? {}, spec); }
+      try { if (spec.entity === 'JOB_COST') validateServiceFields(current.sales?.serviceType, req.body ?? {}); proposedData = normalizedChanges(req.body ?? {}, spec); }
       catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
       if (spec.entity === 'INVENTORY') {
         const category = String(proposedData.category ?? current.category).toUpperCase();
         const unit = String(proposedData.unit ?? current.unit);
-        const units: Record<string, string[]> = { GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'], BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'] };
+        const units: Record<string, string[]> = { SCRAP: ['grams'], GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'], BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'] };
         if (!units[category] || !units[category].includes(unit)) { res.status(400).json({ error: 'Choose a supported category and unit combination.' }); return; }
       }
       if (spec.entity === 'SALE') {
@@ -172,6 +174,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
     case 'JOB_COST': {
       const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { sales: true } });
       if (!job) throw new Error('Job costing is no longer active.');
+      const rules = goldRestoreSnapshot ? serviceRules(job.sales?.serviceType) : validateServiceFields(job.sales?.serviceType, changes);
       const { sellingPrice, ...jobFields } = changes;
       await tx.job_Cost.update({ where: { jobCostId: id }, data: {
         ...(jobFields.goldUsed !== undefined ? { goldUsed: goldWeight(jobFields.goldUsed) } : {}),
@@ -186,7 +189,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
         ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
       } });
       if (goldRestoreSnapshot && Array.isArray(goldRestoreSnapshot.inventoryMovement)) {
-        await tx.inventory.updateMany({ where: { jobCostId: id, category: 'GOLD' }, data: { deletedAt: new Date() } });
+        await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: new Date() } });
         for (const row of goldRestoreSnapshot.inventoryMovement) {
           await tx.inventory.update({ where: { referenceId: row.referenceId }, data: {
             itemName: row.itemName, goldKarat: row.goldKarat ?? null, unit: row.unit,
@@ -195,6 +198,9 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
           } });
         }
         await tx.job_Cost.update({ where: { jobCostId: id }, data: { goldKarat: goldRestoreSnapshot.goldKarat ?? null } });
+      } else if (!rules.gold) {
+        await releaseGoldAllocation(tx, id);
+        await tx.job_Cost.update({ where: { jobCostId: id }, data: { goldUsed: 0, goldScrap: 0, goldCostPerG: 0, stoneCost: 0 } });
       } else {
         const source = jobFields.goldSourceId ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
         await syncGoldAllocation(tx, {
@@ -260,6 +266,8 @@ async function applyDelete(tx: Prisma.TransactionClient, request: any): Promise<
       await tx.sales.update({ where: { invoiceId: id }, data: { deletedAt: now } });
       if (sale.job) {
         await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: now, inquiryId: null } });
+        await tx.inventory.updateMany({ where: { jobCostId: sale.job.jobCostId, deletedAt: null }, data: { deletedAt: now } });
+        await validateInventoryLedger(tx);
         if (sale.job.inquiryId) await tx.inquiries.update({ where: { inquiryId: sale.job.inquiryId }, data: { status: 'PENDING' } });
       }
       return;
@@ -287,6 +295,8 @@ async function applyDelete(tx: Prisma.TransactionClient, request: any): Promise<
       return;
     }
     case 'INVENTORY': {
+      const current = await tx.inventory.findFirst({ where: { referenceId: id, deletedAt: null } });
+      if (current?.jobCostId && ['GOLD', 'SCRAP'].includes(current.category)) throw new Error('Edit the linked job costing to adjust this automatic movement.');
       await tx.inventory.update({ where: { referenceId: id }, data: { deletedAt: now } });
       await validateInventoryLedger(tx); return;
     }
@@ -306,13 +316,20 @@ async function undoApprovedRequest(tx: Prisma.TransactionClient, request: any): 
   switch (request.entityType as Entity) {
     case 'SALE': {
       await tx.sales.update({ where: { invoiceId: id }, data: { deletedAt: null } });
-      if (before.jobCostId) await tx.job_Cost.update({ where: { jobCostId: before.jobCostId }, data: { deletedAt: null, inquiryId: before.job?.inquiryId ?? undefined } });
+      if (before.jobCostId) {
+        await tx.job_Cost.update({ where: { jobCostId: before.jobCostId }, data: { deletedAt: null, inquiryId: before.job?.inquiryId ?? undefined } });
+        for (const row of before.job?.inventoryMovement ?? []) await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { deletedAt: row.deletedAt ? new Date(row.deletedAt) : null } });
+        await validateInventoryLedger(tx);
+      }
       return;
     }
     case 'JOB_COST': {
       await tx.job_Cost.update({ where: { jobCostId: id }, data: { deletedAt: null, inquiryId: before.inquiryId ?? undefined } });
       await tx.sales.updateMany({ where: { jobCostId: id }, data: { deletedAt: null } });
-      await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: null } });
+      await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: new Date() } });
+      for (const row of before.inventoryMovement ?? []) {
+        await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { deletedAt: row.deletedAt ? new Date(row.deletedAt) : null } });
+      }
       await validateInventoryLedger(tx);
       return;
     }

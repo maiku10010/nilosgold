@@ -7,9 +7,9 @@ const validation_1 = require("../validation");
 const friendlyId_1 = require("../friendlyId");
 const inventoryLedger_1 = require("../inventoryLedger");
 const router = (0, express_1.Router)();
-const categories = ['GOLD', 'SILVER', 'GEMSTONES', 'BOXES', 'PACKAGING', 'FINDINGS', 'TOOLS'];
+const categories = ['GOLD', 'SCRAP', 'SILVER', 'GEMSTONES', 'BOXES', 'PACKAGING', 'FINDINGS', 'TOOLS'];
 const unitsByCategory = {
-    GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'],
+    SCRAP: ['grams'], GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'],
     BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'],
 };
 function parseMovement(body, existing) {
@@ -33,13 +33,13 @@ function parseMovement(body, existing) {
         return 'Unit price must be greater than zero.';
     if (category === 'GOLD' && goldKarat === null && !existing)
         return 'Choose a gold karat from 10K to 24K.';
-    if (category === 'GOLD' && goldKarat !== null && (!Number.isInteger(goldKarat) || goldKarat < 10 || goldKarat > 24))
+    if (['GOLD', 'SCRAP'].includes(category) && goldKarat !== null && (!Number.isInteger(goldKarat) || goldKarat < 10 || goldKarat > 24))
         return 'Gold karat must be a whole number from 10K to 24K.';
-    if (category !== 'GOLD' && goldKarat !== null)
-        return 'Karat can only be set for gold inventory.';
+    if (!['GOLD', 'SCRAP'].includes(category) && goldKarat !== null)
+        return 'Karat can only be set for gold or scrap inventory.';
     if (body.date !== undefined && !(0, validation_1.isValidNonFutureDate)(body.date))
         return 'Inventory date must be a valid date no later than today.';
-    return { category: category, itemName, unit, goldKarat: category === 'GOLD' ? goldKarat : null, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
+    return { category: category, itemName, unit, goldKarat: ['GOLD', 'SCRAP'].includes(category) ? goldKarat : null, quantityIn: Number(quantityIn), quantityOut: Number(quantityOut), quantityLoss: Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
 }
 router.post('/', async (req, res) => {
     try {
@@ -89,6 +89,8 @@ router.put('/:referenceId', async (req, res) => {
         const existing = await db_1.prisma.inventory.findFirst({ where: { referenceId: targetId, deletedAt: null } });
         if (!existing)
             return res.status(404).json({ error: 'Inventory entry not found or already archived.' });
+        if (existing.jobCostId && ['GOLD', 'SCRAP'].includes(existing.category))
+            return res.status(409).json({ error: 'Edit the linked job costing to adjust this automatic movement.' });
         const parsed = parseMovement(req.body, existing);
         if (typeof parsed === 'string')
             return res.status(400).json({ error: parsed });
@@ -118,6 +120,9 @@ router.delete('/:referenceId', async (req, res) => {
     try {
         const targetId = Array.isArray(req.params.referenceId) ? req.params.referenceId[0] : req.params.referenceId;
         const deleted = await db_1.prisma.$transaction(async (tx) => {
+            const existing = await tx.inventory.findFirst({ where: { referenceId: targetId, deletedAt: null } });
+            if (existing?.jobCostId && ['GOLD', 'SCRAP'].includes(existing.category))
+                throw Object.assign(new Error('Delete or edit the linked job costing to adjust this automatic movement.'), { statusCode: 409 });
             const result = await tx.inventory.updateMany({ where: { referenceId: targetId, deletedAt: null }, data: { deletedAt: new Date() } });
             if (!result.count)
                 return 0;

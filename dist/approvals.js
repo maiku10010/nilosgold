@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.queueStaffChanges = queueStaffChanges;
+const serviceRules_1 = require("./lib/serviceRules");
 const rounding_1 = require("./rounding");
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
@@ -35,9 +36,9 @@ function json(value) {
 }
 async function findCurrent(entity, id) {
     switch (entity) {
-        case 'SALE': return db_1.prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true, payments: true } });
+        case 'SALE': return db_1.prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true, payments: true, job: { include: { inventoryMovement: true } } } });
         case 'JOB_COST': {
-            const job = await db_1.prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } }, inventoryMovement: { where: { category: 'GOLD' } } } });
+            const job = await db_1.prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } }, inventoryMovement: true } });
             if (!job)
                 return null;
             const source = await db_1.prisma.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
@@ -138,9 +139,15 @@ async function queueStaffChanges(req, res, next) {
             res.status(404).json({ error: 'Record was not found or is already archived.' });
             return;
         }
+        if (spec.entity === 'INVENTORY' && current.jobCostId && ['GOLD', 'SCRAP'].includes(current.category)) {
+            res.status(409).json({ error: 'Edit the linked job costing to adjust this automatic movement.' });
+            return;
+        }
         let proposedData = null;
         if (action === 'UPDATE') {
             try {
+                if (spec.entity === 'JOB_COST')
+                    (0, serviceRules_1.validateServiceFields)(current.sales?.serviceType, req.body ?? {});
                 proposedData = normalizedChanges(req.body ?? {}, spec);
             }
             catch (error) {
@@ -150,7 +157,7 @@ async function queueStaffChanges(req, res, next) {
             if (spec.entity === 'INVENTORY') {
                 const category = String(proposedData.category ?? current.category).toUpperCase();
                 const unit = String(proposedData.unit ?? current.unit);
-                const units = { GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'], BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'] };
+                const units = { SCRAP: ['grams'], GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'], BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'] };
                 if (!units[category] || !units[category].includes(unit)) {
                     res.status(400).json({ error: 'Choose a supported category and unit combination.' });
                     return;
@@ -222,6 +229,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
             const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { sales: true } });
             if (!job)
                 throw new Error('Job costing is no longer active.');
+            const rules = goldRestoreSnapshot ? (0, serviceRules_1.serviceRules)(job.sales?.serviceType) : (0, serviceRules_1.validateServiceFields)(job.sales?.serviceType, changes);
             const { sellingPrice, ...jobFields } = changes;
             await tx.job_Cost.update({ where: { jobCostId: id }, data: {
                     ...(jobFields.goldUsed !== undefined ? { goldUsed: (0, goldAllocation_1.goldWeight)(jobFields.goldUsed) } : {}),
@@ -236,7 +244,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                     ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
                 } });
             if (goldRestoreSnapshot && Array.isArray(goldRestoreSnapshot.inventoryMovement)) {
-                await tx.inventory.updateMany({ where: { jobCostId: id, category: 'GOLD' }, data: { deletedAt: new Date() } });
+                await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: new Date() } });
                 for (const row of goldRestoreSnapshot.inventoryMovement) {
                     await tx.inventory.update({ where: { referenceId: row.referenceId }, data: {
                             itemName: row.itemName, goldKarat: row.goldKarat ?? null, unit: row.unit,
@@ -245,6 +253,10 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                         } });
                 }
                 await tx.job_Cost.update({ where: { jobCostId: id }, data: { goldKarat: goldRestoreSnapshot.goldKarat ?? null } });
+            }
+            else if (!rules.gold) {
+                await (0, goldAllocation_1.releaseGoldAllocation)(tx, id);
+                await tx.job_Cost.update({ where: { jobCostId: id }, data: { goldUsed: 0, goldScrap: 0, goldCostPerG: 0, stoneCost: 0 } });
             }
             else {
                 const source = jobFields.goldSourceId ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
@@ -321,6 +333,8 @@ async function applyDelete(tx, request) {
             await tx.sales.update({ where: { invoiceId: id }, data: { deletedAt: now } });
             if (sale.job) {
                 await tx.job_Cost.update({ where: { jobCostId: sale.job.jobCostId }, data: { deletedAt: now, inquiryId: null } });
+                await tx.inventory.updateMany({ where: { jobCostId: sale.job.jobCostId, deletedAt: null }, data: { deletedAt: now } });
+                await (0, inventoryLedger_1.validateInventoryLedger)(tx);
                 if (sale.job.inquiryId)
                     await tx.inquiries.update({ where: { inquiryId: sale.job.inquiryId }, data: { status: 'PENDING' } });
             }
@@ -359,6 +373,9 @@ async function applyDelete(tx, request) {
             return;
         }
         case 'INVENTORY': {
+            const current = await tx.inventory.findFirst({ where: { referenceId: id, deletedAt: null } });
+            if (current?.jobCostId && ['GOLD', 'SCRAP'].includes(current.category))
+                throw new Error('Edit the linked job costing to adjust this automatic movement.');
             await tx.inventory.update({ where: { referenceId: id }, data: { deletedAt: now } });
             await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             return;
@@ -380,14 +397,21 @@ async function undoApprovedRequest(tx, request) {
     switch (request.entityType) {
         case 'SALE': {
             await tx.sales.update({ where: { invoiceId: id }, data: { deletedAt: null } });
-            if (before.jobCostId)
+            if (before.jobCostId) {
                 await tx.job_Cost.update({ where: { jobCostId: before.jobCostId }, data: { deletedAt: null, inquiryId: before.job?.inquiryId ?? undefined } });
+                for (const row of before.job?.inventoryMovement ?? [])
+                    await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { deletedAt: row.deletedAt ? new Date(row.deletedAt) : null } });
+                await (0, inventoryLedger_1.validateInventoryLedger)(tx);
+            }
             return;
         }
         case 'JOB_COST': {
             await tx.job_Cost.update({ where: { jobCostId: id }, data: { deletedAt: null, inquiryId: before.inquiryId ?? undefined } });
             await tx.sales.updateMany({ where: { jobCostId: id }, data: { deletedAt: null } });
-            await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: null } });
+            await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: new Date() } });
+            for (const row of before.inventoryMovement ?? []) {
+                await tx.inventory.update({ where: { referenceId: row.referenceId }, data: { deletedAt: row.deletedAt ? new Date(row.deletedAt) : null } });
+            }
             await (0, inventoryLedger_1.validateInventoryLedger)(tx);
             return;
         }
