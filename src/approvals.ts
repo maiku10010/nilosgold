@@ -271,6 +271,35 @@ async function applyDelete(tx: Prisma.TransactionClient, request: any): Promise<
   }
 }
 
+async function undoApprovedRequest(tx: Prisma.TransactionClient, request: any): Promise<void> {
+  const before = (request.beforeData ?? {}) as Record<string, any>;
+  if (request.action === 'UPDATE') {
+    const proposed = (request.proposedData ?? {}) as Record<string, unknown>;
+    const restore = Object.fromEntries(Object.keys(proposed).map(key => [key, before[key] ?? before.client?.[key]]));
+    await applyUpdate(tx, { ...request, proposedData: restore }, restore);
+    return;
+  }
+  const id = request.entityId as string;
+  switch (request.entityType as Entity) {
+    case 'SALE': {
+      await tx.sales.update({ where: { invoiceId: id }, data: { deletedAt: null } });
+      if (before.jobCostId) await tx.job_Cost.update({ where: { jobCostId: before.jobCostId }, data: { deletedAt: null, inquiryId: before.job?.inquiryId ?? undefined } });
+      return;
+    }
+    case 'JOB_COST': {
+      await tx.job_Cost.update({ where: { jobCostId: id }, data: { deletedAt: null, inquiryId: before.inquiryId ?? undefined } });
+      await tx.sales.updateMany({ where: { jobCostId: id }, data: { deletedAt: null } });
+      await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: null } });
+      await validateInventoryLedger(tx);
+      return;
+    }
+    case 'INQUIRY': await tx.inquiries.update({ where: { inquiryId: id }, data: { deletedAt: null } }); return;
+    case 'EXPENSE': await tx.expenses.update({ where: { expenseId: id }, data: { deletedAt: null } }); return;
+    case 'INVENTORY': await tx.inventory.update({ where: { referenceId: id }, data: { deletedAt: null } }); await validateInventoryLedger(tx); return;
+    case 'CLIENT': await tx.client.update({ where: { clientId: id }, data: { deletedAt: null } }); return;
+  }
+}
+
 const router = Router();
 router.get('/', async (_req: Request, res: Response) => {
   const rows = await prisma.approvalRequest.findMany({
@@ -308,6 +337,24 @@ router.post('/:requestId/reject', async (req: Request, res: Response) => {
   const row = await prisma.approvalRequest.findUnique({ where: { requestId } });
   await writeSystemLog({ actorEmpId: req.user!.empId, actorName: req.user!.empName, actorRole: req.user!.empRole, action: 'APPROVAL_REJECTED', entityType: row?.entityType, entityId: row?.entityId, details: { requestId, note } });
   res.json({ request: row, message: 'Change rejected. The record remains unchanged.' });
+});
+
+router.post('/:requestId/undo', async (req: Request, res: Response) => {
+  const requestId = Array.isArray(req.params.requestId) ? req.params.requestId[0] : req.params.requestId;
+  try {
+    const result = await prisma.$transaction(async tx => {
+      const approval = await tx.approvalRequest.findUnique({ where: { requestId } });
+      if (!approval || approval.status !== 'APPROVED' || approval.reviewerEmpId !== req.user!.empId || !approval.reviewedAt) throw Object.assign(new Error('This approval can no longer be undone.'), { statusCode: 409 });
+      if (Date.now() - approval.reviewedAt.getTime() > 5_000) throw Object.assign(new Error('The five-second undo window has ended.'), { statusCode: 409 });
+      await undoApprovedRequest(tx, approval);
+      return tx.approvalRequest.update({ where: { requestId }, data: { status: 'REJECTED', reviewerNote: 'Approval undone by reviewer.', reviewedAt: new Date() } });
+    });
+    await writeSystemLog({ actorEmpId: req.user!.empId, actorName: req.user!.empName, actorRole: req.user!.empRole, action: 'APPROVAL_UNDONE', entityType: result.entityType, entityId: result.entityId, details: { requestId } });
+    res.json({ request: result, message: 'Approval undone. The prior record state was restored.' });
+  } catch (error) {
+    const status = Number((error as { statusCode?: number }).statusCode) || 409;
+    res.status(status).json({ error: (error as Error).message || 'The approval could not be undone.' });
+  }
 });
 
 export default router;

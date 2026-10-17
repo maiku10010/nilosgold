@@ -346,6 +346,44 @@ async function applyDelete(tx, request) {
             return;
     }
 }
+async function undoApprovedRequest(tx, request) {
+    const before = (request.beforeData ?? {});
+    if (request.action === 'UPDATE') {
+        const proposed = (request.proposedData ?? {});
+        const restore = Object.fromEntries(Object.keys(proposed).map(key => [key, before[key] ?? before.client?.[key]]));
+        await applyUpdate(tx, { ...request, proposedData: restore }, restore);
+        return;
+    }
+    const id = request.entityId;
+    switch (request.entityType) {
+        case 'SALE': {
+            await tx.sales.update({ where: { invoiceId: id }, data: { deletedAt: null } });
+            if (before.jobCostId)
+                await tx.job_Cost.update({ where: { jobCostId: before.jobCostId }, data: { deletedAt: null, inquiryId: before.job?.inquiryId ?? undefined } });
+            return;
+        }
+        case 'JOB_COST': {
+            await tx.job_Cost.update({ where: { jobCostId: id }, data: { deletedAt: null, inquiryId: before.inquiryId ?? undefined } });
+            await tx.sales.updateMany({ where: { jobCostId: id }, data: { deletedAt: null } });
+            await tx.inventory.updateMany({ where: { jobCostId: id }, data: { deletedAt: null } });
+            await (0, inventoryLedger_1.validateInventoryLedger)(tx);
+            return;
+        }
+        case 'INQUIRY':
+            await tx.inquiries.update({ where: { inquiryId: id }, data: { deletedAt: null } });
+            return;
+        case 'EXPENSE':
+            await tx.expenses.update({ where: { expenseId: id }, data: { deletedAt: null } });
+            return;
+        case 'INVENTORY':
+            await tx.inventory.update({ where: { referenceId: id }, data: { deletedAt: null } });
+            await (0, inventoryLedger_1.validateInventoryLedger)(tx);
+            return;
+        case 'CLIENT':
+            await tx.client.update({ where: { clientId: id }, data: { deletedAt: null } });
+            return;
+    }
+}
 const router = (0, express_1.Router)();
 router.get('/', async (_req, res) => {
     const rows = await db_1.prisma.approvalRequest.findMany({
@@ -389,5 +427,25 @@ router.post('/:requestId/reject', async (req, res) => {
     const row = await db_1.prisma.approvalRequest.findUnique({ where: { requestId } });
     await (0, audit_1.writeSystemLog)({ actorEmpId: req.user.empId, actorName: req.user.empName, actorRole: req.user.empRole, action: 'APPROVAL_REJECTED', entityType: row?.entityType, entityId: row?.entityId, details: { requestId, note } });
     res.json({ request: row, message: 'Change rejected. The record remains unchanged.' });
+});
+router.post('/:requestId/undo', async (req, res) => {
+    const requestId = Array.isArray(req.params.requestId) ? req.params.requestId[0] : req.params.requestId;
+    try {
+        const result = await db_1.prisma.$transaction(async (tx) => {
+            const approval = await tx.approvalRequest.findUnique({ where: { requestId } });
+            if (!approval || approval.status !== 'APPROVED' || approval.reviewerEmpId !== req.user.empId || !approval.reviewedAt)
+                throw Object.assign(new Error('This approval can no longer be undone.'), { statusCode: 409 });
+            if (Date.now() - approval.reviewedAt.getTime() > 5_000)
+                throw Object.assign(new Error('The five-second undo window has ended.'), { statusCode: 409 });
+            await undoApprovedRequest(tx, approval);
+            return tx.approvalRequest.update({ where: { requestId }, data: { status: 'REJECTED', reviewerNote: 'Approval undone by reviewer.', reviewedAt: new Date() } });
+        });
+        await (0, audit_1.writeSystemLog)({ actorEmpId: req.user.empId, actorName: req.user.empName, actorRole: req.user.empRole, action: 'APPROVAL_UNDONE', entityType: result.entityType, entityId: result.entityId, details: { requestId } });
+        res.json({ request: result, message: 'Approval undone. The prior record state was restored.' });
+    }
+    catch (error) {
+        const status = Number(error.statusCode) || 409;
+        res.status(status).json({ error: error.message || 'The approval could not be undone.' });
+    }
 });
 exports.default = router;

@@ -9,6 +9,7 @@ const approvals = require('../dist/approvals');
 const receipt = salesRouter.stack.find(layer => layer.route?.path === '/:invoiceId/receipt').route.stack[0].handle;
 const updateSale = salesRouter.stack.find(layer => layer.route?.methods.put).route.stack[0].handle;
 const approve = approvals.default.stack.find(layer => layer.route?.path === '/:requestId/approve').route.stack[0].handle;
+const undoApproval = approvals.default.stack.find(layer => layer.route?.path === '/:requestId/undo').route.stack[0].handle;
 const originalFetch = global.fetch;
 const originalEnv = { key: process.env.RESEND_API_KEY, from: process.env.EMAIL_FROM };
 let sale, calls, writes;
@@ -151,4 +152,15 @@ test('staff email edits remain queued until another admin approves them', async 
   await approve({ params: { requestId: 'A-1' }, body: {}, user: { empId: 'admin', empName: 'Admin', empRole: 'Admin' } }, reviewed);
   assert.equal(reviewed.statusCode, 200);
   assert.equal(sale.client.email, 'new@example.com');
+});
+test('an approving admin can undo an email edit during the five-second window', async () => {
+  const approval = { requestId: 'A-2', status: 'APPROVED', action: 'UPDATE', entityType: 'SALE', entityId: 'INV-1', reviewerEmpId: 'admin', reviewedAt: new Date(), beforeData: { client: { email: 'customer@example.com' } }, proposedData: { email: 'new@example.com' } };
+  sale.client.email = 'new@example.com';
+  prisma.approvalRequest.findUnique = async () => approval;
+  prisma.approvalRequest.update = async ({ data }) => ({ ...approval, ...data });
+  const response = res();
+  await undoApproval({ params: { requestId: 'A-2' }, user: { empId: 'admin', empName: 'Admin', empRole: 'Admin' } }, response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(sale.client.email, 'customer@example.com');
+  assert.equal(response.body.request.status, 'REJECTED');
 });
