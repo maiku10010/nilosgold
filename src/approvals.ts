@@ -121,7 +121,7 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
     let proposedData: Record<string, unknown> | null = null;
     if (action === 'UPDATE') {
       try {
-        const type = spec.entity === 'JOB_COST' ? current.sales?.serviceType as ServiceType : undefined;
+        const type = spec.entity === 'JOB_COST' ? current.serviceType as ServiceType : undefined;
         const payload = type ? stripDisallowedFields(type, req.body ?? {}) : req.body ?? {};
         if (spec.entity === 'JOB_COST') validateServiceFields(type, req.body ?? {});
         proposedData = normalizedChanges(payload, spec, type);
@@ -183,8 +183,8 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
     case 'JOB_COST': {
       const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { sales: true } });
       if (!job) throw new Error('Job costing is no longer active.');
-      const payload = goldRestoreSnapshot ? changes : stripDisallowedFields(job.sales?.serviceType as ServiceType, changes);
-      const rules = goldRestoreSnapshot ? serviceRules(job.sales?.serviceType) : validateServiceFields(job.sales?.serviceType, changes);
+      const payload = goldRestoreSnapshot ? changes : stripDisallowedFields(job.serviceType as ServiceType, changes);
+      const rules = goldRestoreSnapshot ? serviceRules(job.serviceType) : validateServiceFields(job.serviceType, changes);
       const { sellingPrice, ...jobFields } = payload;
       await tx.job_Cost.update({ where: { jobCostId: id }, data: {
         ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed === null ? null : goldWeight(jobFields.goldUsed) } : {}),

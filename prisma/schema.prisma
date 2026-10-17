@@ -117,6 +117,7 @@ model Inquiries {
 }
 
 model Job_Cost {
+  serviceType    String @map("service_type")
   jobCostId       String    @id
   universalReferenceId String? @map("universal_reference_id")
   sourceSheet String? @map("source_sheet")

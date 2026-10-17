@@ -5,6 +5,7 @@ exports.serviceRules = serviceRules;
 exports.validateServiceFields = validateServiceFields;
 exports.getAllowedFields = getAllowedFields;
 exports.stripDisallowedFields = stripDisallowedFields;
+exports.getInquiryServiceType = getInquiryServiceType;
 exports.SERVICE_RULES = {
     Repair: { gold: true, stone: true, scrap: true, labor: true },
     Custom: { gold: true, stone: true, scrap: true, labor: true },
@@ -47,4 +48,11 @@ function stripDisallowedFields(serviceType, payload) {
             result[field] = null;
     }
     return result;
+}
+/** Inquiry categories are the existing stored service type; expose one canonical API value. */
+function getInquiryServiceType(inquiry) {
+    const value = inquiry.serviceType ?? inquiry.category;
+    if (typeof value !== 'string')
+        return null;
+    return Object.keys(exports.SERVICE_RULES).find(type => type.toLowerCase() === value.trim().toLowerCase()) ?? null;
 }

@@ -156,7 +156,7 @@ async function queueStaffChanges(req, res, next) {
         let proposedData = null;
         if (action === 'UPDATE') {
             try {
-                const type = spec.entity === 'JOB_COST' ? current.sales?.serviceType : undefined;
+                const type = spec.entity === 'JOB_COST' ? current.serviceType : undefined;
                 const payload = type ? (0, serviceRules_1.stripDisallowedFields)(type, req.body ?? {}) : req.body ?? {};
                 if (spec.entity === 'JOB_COST')
                     (0, serviceRules_1.validateServiceFields)(type, req.body ?? {});
@@ -241,8 +241,8 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
             const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { sales: true } });
             if (!job)
                 throw new Error('Job costing is no longer active.');
-            const payload = goldRestoreSnapshot ? changes : (0, serviceRules_1.stripDisallowedFields)(job.sales?.serviceType, changes);
-            const rules = goldRestoreSnapshot ? (0, serviceRules_1.serviceRules)(job.sales?.serviceType) : (0, serviceRules_1.validateServiceFields)(job.sales?.serviceType, changes);
+            const payload = goldRestoreSnapshot ? changes : (0, serviceRules_1.stripDisallowedFields)(job.serviceType, changes);
+            const rules = goldRestoreSnapshot ? (0, serviceRules_1.serviceRules)(job.serviceType) : (0, serviceRules_1.validateServiceFields)(job.serviceType, changes);
             const { sellingPrice, ...jobFields } = payload;
             await tx.job_Cost.update({ where: { jobCostId: id }, data: {
                     ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed === null ? null : (0, goldAllocation_1.goldWeight)(jobFields.goldUsed) } : {}),

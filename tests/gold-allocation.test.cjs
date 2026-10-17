@@ -6,7 +6,7 @@ const { calculateInventoryBalances } = require('../dist/inventoryLedger');
 
 const source = (data = {}) => ({ referenceId: '18K-IN', category: 'GOLD', goldKarat: 18, itemName: 'Gold · 18K', unit: 'grams', quantityIn: new Prisma.Decimal('1.2'), quantityOut: new Prisma.Decimal(0), quantityLoss: new Prisma.Decimal(0), deletedAt: null, jobCostId: null, ...data });
 function database(rows) {
-  const job = { jobCostId: 'JOB-1', goldKarat: 18, goldUsed: '0', goldScrap: '0', goldCostPerG: 8000, universalReferenceId: 'REF-1', deletedAt: null, sales: { invoiceId: 'INV-1', serviceType: 'Repair', price: 15000, payments: [] } };
+  const job = { jobCostId: 'JOB-1', serviceType: 'Repair', goldKarat: 18, goldUsed: '0', goldScrap: '0', goldCostPerG: 8000, universalReferenceId: 'REF-1', deletedAt: null, sales: { invoiceId: 'INV-1', serviceType: 'Repair', price: 15000, payments: [] } };
   return {
     rows, job,
     inventory: {
@@ -136,7 +136,7 @@ test('the costing create route deducts the required gold source and persists its
   Object.assign(prisma, tx);
   prisma.$transaction = async (fn, options) => { assert.equal(options.isolationLevel, 'Serializable'); return fn(prisma); };
   prisma.inquiries = {
-    findFirst: async () => ({ inquiryId: 'INQ-1', customerName: 'Mia', status: 'PENDING', jobCost: null, client: { clientId: 'CLIENT-1' }, universalReferenceId: 'REF-1' }),
+    findFirst: async () => ({ inquiryId: 'INQ-1', category: 'Repair', customerName: 'Mia', status: 'PENDING', jobCost: null, client: { clientId: 'CLIENT-1' }, universalReferenceId: 'REF-1' }),
     update: async () => ({}),
   };
   prisma.employee = { findFirst: async () => ({ empId: 'EMP-1' }) };
@@ -214,7 +214,7 @@ test('costing API rejects disabled fields with 400 and permits labor-only Cleani
   Object.assign(prisma, tx);
   let transactions = 0;
   prisma.$transaction = async fn => { transactions++; return fn(prisma); };
-  prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', customerName: 'Mia', status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
+  prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', category: 'Cleaning', customerName: 'Mia', status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
   prisma.employee = { findFirst: async () => ({ empId: 'E' }) };
   prisma.job_Cost.create = async ({ data }) => Object.assign(tx.job, data);
   prisma.job_Cost.findUniqueOrThrow = async () => tx.job;
@@ -269,7 +269,7 @@ test('approval edit and undo restore the original scrap amount and karat without
 });
 
 test('staff and direct edits validate the stored service type rather than a spoofed payload type', async () => {
-  const tx = database([source()]); tx.job.sales.serviceType = 'Cleaning';
+  const tx = database([source()]); tx.job.serviceType = 'Cleaning'; tx.job.sales.serviceType = 'Cleaning';
   Object.assign(prisma, tx);
   const queued = response();
   await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: { empId: 'STAFF', empRole: 'Staff' }, body: { serviceType: 'Repair', goldUsed: 1 } }, queued, () => assert.fail('must reject'));
@@ -286,6 +286,7 @@ test('staff and direct edits validate the stored service type rather than a spoo
 
 test('direct Resize edits store stone cost as null and preserve measured-zero labor and scrap', async () => {
   const tx = database([source()]);
+  tx.job.serviceType = 'Resize';
   tx.job.sales = { ...tx.job.sales, serviceType: 'Resize', client: { clientName: 'Mia' } };
   Object.assign(prisma, tx);
   prisma.$transaction = async (fn, options) => { assert.equal(options.isolationLevel, 'Serializable'); return fn(prisma); };
@@ -304,7 +305,7 @@ test('direct Resize edits store stone cost as null and preserve measured-zero la
 test('Cleaning staff edits retain nulls through approval and undo and reject forbidden values', async () => {
   const tx = database([source()]);
   Object.assign(tx.job, { goldUsed: null, goldScrap: null, goldCostPerG: null, stoneCost: null, laborCost: 1000, goldKarat: null, inventoryMovement: [] });
-  tx.job.sales.serviceType = 'Cleaning';
+  tx.job.serviceType = 'Cleaning'; tx.job.sales.serviceType = 'Cleaning';
   Object.assign(prisma, tx);
   let queued;
   prisma.approvalRequest = {
@@ -347,7 +348,7 @@ test('Repair and Custom creates preserve omitted/null stone costs and explicitly
     for (const stoneCost of [undefined, null, 0, 500]) {
       const tx = database([source()]); Object.assign(prisma, tx);
       prisma.$transaction = async fn => fn(prisma);
-      prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', customerName: 'Mia', status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
+      prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', category: type, customerName: 'Mia', status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
       prisma.employee = { findFirst: async () => ({ empId: 'E' }) };
       prisma.job_Cost.create = async ({ data }) => Object.assign(tx.job, data);
       prisma.job_Cost.findUniqueOrThrow = async () => tx.job;
@@ -409,4 +410,61 @@ test('Repair staff can request clearing stone cost and approval undo restores it
   await undo({ params: { requestId: 'APP-STONE' }, user }, restored);
   assert.equal(restored.statusCode, 200);
   assert.equal(tx.job.stoneCost, 500);
+});
+
+
+test('costing inherits the original inquiry service type and audits only an actual override', async () => {
+  const router = require('../dist/routes/job_costing').default;
+  const create = router.stack.find(layer => layer.route?.path === '/' && layer.route?.methods.post).route.stack[0].handle;
+  for (const [original, chosen] of [['Cleaning', undefined], ['Custom', 'Custom'], ['Custom', 'Cleaning'], ['Cleaning', 'Repair']]) {
+    const tx = database([source()]); Object.assign(prisma, tx);
+    const logs = []; let inTransaction = false;
+    prisma.$transaction = async (fn, options) => { assert.equal(options.isolationLevel, 'Serializable'); inTransaction = true; try { return await fn(prisma); } finally { inTransaction = false; } };
+    prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', category: original, customerName: 'Mia', status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
+    prisma.employee = { findFirst: async () => ({ empId: 'E' }) };
+    prisma.job_Cost.create = async ({ data }) => Object.assign(tx.job, data);
+    prisma.job_Cost.findUniqueOrThrow = async () => tx.job;
+    let invoiceType;
+    prisma.sales = { create: async ({ data }) => { invoiceType = data.serviceType; return data; } };
+    prisma.systemLog = { create: async ({ data }) => { assert.equal(inTransaction, true); logs.push(data); return data; } };
+    const effective = chosen ?? original;
+    const body = { inquiryId: 'INQ-1', clientName: 'Mia', laborCost: 1000, sellingPrice: 15000,
+      ...(chosen ? { serviceType: chosen } : {}),
+      ...(effective === 'Cleaning' ? {} : { goldSourceId: '18K-IN', goldUsed: '.5', goldCostPerG: 8000 }),
+    };
+    const result = response(); result.locals = {};
+    await create({ body, user: { empId: 'STAFF', empName: 'Anna', empRole: 'Staff' } }, result);
+    assert.equal(result.statusCode, 201);
+    assert.equal(result.body.serviceType, effective);
+    assert.equal(invoiceType, effective);
+    assert.equal(logs.length, effective === original ? 0 : 1);
+    if (logs.length) {
+      assert.equal(logs[0].entityId, tx.job.jobCostId);
+      assert.equal(logs[0].entityType, 'JOB_COST');
+      assert.equal(logs[0].actorEmpId, 'STAFF');
+      assert.deepEqual(logs[0].details.before, { serviceType: original });
+      assert.deepEqual(logs[0].details.after, { serviceType: effective });
+      assert.equal(logs[0].details.inquiryId, 'INQ-1');
+    }
+  }
+});
+
+test('costing validation uses the job service type even if its invoice type differs', async () => {
+  const tx = database([source()]); tx.job.serviceType = 'Cleaning'; tx.job.sales.serviceType = 'Repair';
+  Object.assign(prisma, tx); prisma.$transaction = async fn => fn(prisma);
+  const router = require('../dist/routes/job_costing').default;
+  const edit = router.stack.find(layer => layer.route?.methods.put).route.stack[0].handle;
+  const result = response();
+  await edit({ params: { jobCostId: 'JOB-1' }, body: { invoiceId: 'INV-1', clientName: 'Mia', goldUsed: 1, goldCostPerG: 8000, laborCost: 1000, sellingPrice: 15000 } }, result);
+  assert.equal(result.statusCode, 400);
+  assert.equal(tx.rows.length, 1);
+});
+
+test('inquiry API exposes its stored category as the canonical serviceType', async () => {
+  prisma.inquiries = { findMany: async () => [{ inquiryId: 'INQ-1', category: 'Cleaning' }, { inquiryId: 'INQ-2', category: 'Custom' }] };
+  const router = require('../dist/routes/inquiries').default;
+  const list = router.stack.find(layer => layer.route?.methods.get).route.stack[0].handle;
+  const result = response();
+  await list({}, result);
+  assert.deepEqual(result.body.map(row => row.serviceType), ['Cleaning', 'Custom']);
 });

@@ -1,3 +1,4 @@
+import { getInquiryServiceType } from '../lib/serviceRules';
 import { Request, Response, Router } from 'express';
 import { prisma } from '../db';
 import { friendlyId } from '../friendlyId';
@@ -36,7 +37,7 @@ router.post('/', async (req: Request, res: Response) => {
     });
 
     res.locals.auditRecordId = inquiry.inquiryId;
-    res.status(201).json(inquiry);
+    res.status(201).json({ ...inquiry, serviceType: getInquiryServiceType(inquiry) });
   } catch (error) {
     console.error('Error creating inquiry:', error);
     res.status(500).json({ error: 'Inquiry could not be saved.' });
@@ -50,7 +51,7 @@ router.get('/', async (_req: Request, res: Response) => {
       include: { client: true, jobCost: { include: { sales: true } } },
       orderBy: { inqDate: 'desc' },
     });
-    res.json(inquiries);
+    res.json(inquiries.map(inquiry => ({ ...inquiry, serviceType: getInquiryServiceType(inquiry) })));
   } catch (error) {
     console.error('Error fetching inquiries:', error);
     res.status(500).json({ error: 'Inquiries could not be loaded.' });
@@ -87,7 +88,7 @@ router.put('/:inquiryId', async (req: Request, res: Response) => {
       },
       include: { client: true, jobCost: { include: { sales: true } } },
     });
-    res.json(inquiry);
+    res.json({ ...inquiry, serviceType: getInquiryServiceType(inquiry) });
   } catch (error) {
     console.error('Error updating inquiry:', error);
     res.status(500).json({ error: 'Inquiry could not be updated.' });

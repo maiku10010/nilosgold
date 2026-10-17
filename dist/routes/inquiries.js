@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const serviceRules_1 = require("../lib/serviceRules");
 const express_1 = require("express");
 const db_1 = require("../db");
 const friendlyId_1 = require("../friendlyId");
@@ -38,7 +39,7 @@ router.post('/', async (req, res) => {
             include: { client: true, jobCost: { include: { sales: true } } },
         });
         res.locals.auditRecordId = inquiry.inquiryId;
-        res.status(201).json(inquiry);
+        res.status(201).json({ ...inquiry, serviceType: (0, serviceRules_1.getInquiryServiceType)(inquiry) });
     }
     catch (error) {
         console.error('Error creating inquiry:', error);
@@ -52,7 +53,7 @@ router.get('/', async (_req, res) => {
             include: { client: true, jobCost: { include: { sales: true } } },
             orderBy: { inqDate: 'desc' },
         });
-        res.json(inquiries);
+        res.json(inquiries.map(inquiry => ({ ...inquiry, serviceType: (0, serviceRules_1.getInquiryServiceType)(inquiry) })));
     }
     catch (error) {
         console.error('Error fetching inquiries:', error);
@@ -93,7 +94,7 @@ router.put('/:inquiryId', async (req, res) => {
             },
             include: { client: true, jobCost: { include: { sales: true } } },
         });
-        res.json(inquiry);
+        res.json({ ...inquiry, serviceType: (0, serviceRules_1.getInquiryServiceType)(inquiry) });
     }
     catch (error) {
         console.error('Error updating inquiry:', error);

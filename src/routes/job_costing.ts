@@ -1,5 +1,5 @@
 import { parseStoneCost } from '../lib/jobCostingSchema';
-import { stripDisallowedFields, validateServiceFields, ServiceType } from '../lib/serviceRules';
+import { stripDisallowedFields, validateServiceFields, getInquiryServiceType, ServiceType } from '../lib/serviceRules';
 import { roundTwo } from '../rounding';
 import { Request, Response, Router } from 'express';
 import { Prisma } from '@prisma/client';
@@ -22,32 +22,36 @@ const withJobSaleTotals = <T extends { sales: any }>(job: T) => job.sales ? { ..
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { inquiryId, clientName, contactNum, empId, serviceType, itemName, deadline, deliveryDate } = req.body;
-    const payload = stripDisallowedFields(serviceType, req.body);
-    const rules = validateServiceFields(serviceType, req.body);
+    const { inquiryId, clientName, contactNum, empId, serviceType: requestedServiceType, itemName, deadline, deliveryDate } = req.body;
+    const requestedPayload = requestedServiceType === undefined ? undefined : stripDisallowedFields(requestedServiceType, req.body);
+    if (requestedPayload) validateServiceFields(requestedServiceType, req.body);
     const requestedDeadline = deadline ?? deliveryDate;
     if (itemName !== undefined && itemName !== null && (typeof itemName !== 'string' || itemName.trim().length > 120)) return res.status(400).json({ error: 'Item name must be 120 characters or fewer.' });
     if (requestedDeadline !== undefined && requestedDeadline !== null && !isTodayOrFutureDate(requestedDeadline)) return res.status(400).json({ error: 'Delivery date must be today or later.' });
-    const goldUsed = goldWeight(payload.goldUsed);
-    const goldScrap = goldWeight(payload.goldScrap ?? 0);
-    const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);
-    const stoneCost = parseStoneCost(payload.stoneCost);
-    const laborCost = roundTwo(payload.laborCost);
-    const laborCharge = roundTwo(payload.laborCharge ?? 0);
-    const otherCost = roundTwo(payload.otherCost ?? 0);
-    const sellingPrice = roundTwo(payload.sellingPrice);
-
     if (typeof inquiryId !== 'string' || !inquiryId || typeof clientName !== 'string' || !clientName.trim()) {
       return res.status(400).json({ error: 'Choose a pending inquiry and confirm the client name.' });
     }
-    if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || (rules.gold && !isPositiveNumber(goldCostPerG)) || !isPositiveNumber(sellingPrice)) {
-      return res.status(400).json({ error: 'Enter non-negative costs, a gold price per gram, and a selling price greater than zero.' });
-    }
-
     const jobCost = await prisma.$transaction(async (tx) => {
       const inquiry = await tx.inquiries.findFirst({ where: { inquiryId, deletedAt: null }, include: { jobCost: true, client: true } });
       if (!inquiry) throw Object.assign(new Error('Inquiry not found or already archived.'), { statusCode: 404 });
       if (inquiry.status !== 'PENDING' || (inquiry.jobCost && !inquiry.jobCost.deletedAt)) throw Object.assign(new Error('Only pending inquiries can be sent to job costing.'), { statusCode: 409 });
+      const originalServiceType = getInquiryServiceType(inquiry);
+      if (!originalServiceType) throw Object.assign(new Error('Update the inquiry with a valid service type before costing it.'), { statusCode: 400 });
+      const serviceType = requestedServiceType ?? originalServiceType;
+      const payload = requestedPayload ?? stripDisallowedFields(serviceType, req.body);
+      const rules = validateServiceFields(serviceType, req.body);
+      const goldUsed = goldWeight(payload.goldUsed);
+      const goldScrap = goldWeight(payload.goldScrap ?? 0);
+      const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);
+      const stoneCost = parseStoneCost(payload.stoneCost);
+      const laborCost = roundTwo(payload.laborCost);
+      const laborCharge = roundTwo(payload.laborCharge ?? 0);
+      const otherCost = roundTwo(payload.otherCost ?? 0);
+      const sellingPrice = roundTwo(payload.sellingPrice);
+
+      if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || (rules.gold && !isPositiveNumber(goldCostPerG)) || !isPositiveNumber(sellingPrice)) {
+        throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
+      }
       // A soft-deleted costing must release the inquiry's unique one-to-one link
       // so the customer can be costed again while retaining the old record.
       if (inquiry.jobCost?.deletedAt) await tx.job_Cost.update({ where: { jobCostId: inquiry.jobCost.jobCostId }, data: { inquiryId: null } });
@@ -84,6 +88,7 @@ router.post('/', async (req: Request, res: Response) => {
       const createdJob = await tx.job_Cost.create({
         data: {
           jobCostId: friendlyId(),
+          serviceType,
           universalReferenceId: inquiry.universalReferenceId ?? inquiry.inquiryId,
           itemName: typeof itemName === 'string' && itemName.trim() ? itemName.trim() : null,
           ...(requestedDeadline ? { deadline: new Date(`${requestedDeadline}T00:00:00Z`) } : {}),
@@ -117,6 +122,12 @@ router.post('/', async (req: Request, res: Response) => {
         where: { inquiryId },
         data: { status: 'APPROVED', client: { connect: { clientId: client.clientId } } },
       });
+
+      if (serviceType !== originalServiceType) await tx.systemLog.create({ data: {
+        actorEmpId: req.user?.empId ?? null, actorName: req.user?.empName ?? 'System', actorRole: req.user?.empRole ?? 'System',
+        action: 'PUT', entityType: 'JOB_COST', entityId: createdJob.jobCostId,
+        details: { reason: 'Service type changed from inquiry', inquiryId, before: { serviceType: originalServiceType }, after: { serviceType } },
+      } });
 
       return withJobSaleTotals(await tx.job_Cost.findUniqueOrThrow({ where: { jobCostId: createdJob.jobCostId }, include: includeJob }));
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -196,8 +207,8 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       const existing = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { sales: { include: { client: true } } } });
       if (!existing) throw Object.assign(new Error('Job costing record not found.'), { statusCode: 404 });
       if (!existing.sales) throw Object.assign(new Error('This costing has no linked invoice.'), { statusCode: 409 });
-      const payload = stripDisallowedFields(existing.sales.serviceType as ServiceType, req.body);
-      const rules = validateServiceFields(existing.sales.serviceType, req.body);
+      const payload = stripDisallowedFields(existing.serviceType as ServiceType, req.body);
+      const rules = validateServiceFields(existing.serviceType, req.body);
       const goldUsed = goldWeight(payload.goldUsed);
       const goldScrap = goldWeight(payload.goldScrap ?? 0);
       const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);

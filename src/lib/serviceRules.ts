@@ -42,3 +42,10 @@ export function stripDisallowedFields(serviceType: ServiceType, payload: Readonl
   }
   return result;
 }
+
+/** Inquiry categories are the existing stored service type; expose one canonical API value. */
+export function getInquiryServiceType(inquiry: { serviceType?: unknown; category?: unknown }): ServiceType | null {
+  const value = inquiry.serviceType ?? inquiry.category;
+  if (typeof value !== 'string') return null;
+  return (Object.keys(SERVICE_RULES) as ServiceType[]).find(type => type.toLowerCase() === value.trim().toLowerCase()) ?? null;
+}

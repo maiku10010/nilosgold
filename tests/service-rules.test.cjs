@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { SERVICE_RULES, validateServiceFields, getAllowedFields, stripDisallowedFields } = require('../dist/lib/serviceRules');
+const { SERVICE_RULES, validateServiceFields, getAllowedFields, stripDisallowedFields, getInquiryServiceType } = require('../dist/lib/serviceRules');
 const { serviceCost } = require('../dist/serviceCost');
 const all = { goldSourceId: '18K-IN', goldUsed: '1', goldScrap: '.2', goldCostPerG: 8000, stoneCost: 500, laborCost: 1000 };
 const cases = {
@@ -59,4 +59,11 @@ test('helpers reject unknown services instead of silently allowing fields', () =
 test('null costs never contribute to totals, while applicable zero costs remain valid', () => {
   assert.equal(serviceCost('Cleaning', { goldUsed: null, goldScrap: null, goldCostPerG: null, stoneCost: null, laborCost: 1000 }).toString(), '1000');
   assert.equal(serviceCost('Resize', { goldUsed: '1', goldScrap: '0', goldCostPerG: 8000, stoneCost: null, laborCost: 0 }).toString(), '8000');
+});
+
+test('inquiry service type normalization prefers the explicit API value and preserves the known category', () => {
+  assert.equal(getInquiryServiceType({ serviceType: 'Cleaning', category: 'Custom' }), 'Cleaning');
+  assert.equal(getInquiryServiceType({ category: ' repair ' }), 'Repair');
+  assert.equal(getInquiryServiceType({ category: 'Unknown' }), null);
+  assert.equal(getInquiryServiceType({}), null);
 });
