@@ -7,6 +7,7 @@ import inquiriesRouter from './routes/inquiries';
 import salesRouter from './routes/sales';
 import clientRouter from './routes/client';
 import employeeRouter from './routes/employee';
+import usersRouter from './routes/users';
 import expensesRouter from './routes/expenses';
 import inventoryRouter from './routes/inventory';
 import jobCostingRouter from './routes/job_costing';
@@ -15,7 +16,7 @@ import auditLogsRouter from './routes/audit_logs';
 import profitAnalysisRouter from './routes/profit_analysis';
 import goldRouter from './routes/gold';
 import approvalsRouter, { queueStaffChanges } from './approvals';
-import { assertAllowedOrigin, authenticate, isAllowedOrigin, requireAdmin } from './auth';
+import { assertAllowedOrigin, authenticate, isAllowedOrigin, requireAdmin, requirePasswordChanged } from './auth';
 import { auditMutations } from './audit';
 
 const app = express();
@@ -30,10 +31,14 @@ app.use(express.json({ limit: '1mb' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok', message: 'Goldsmith Accounting API is running' }));
 app.use('/auth', authRouter);
 app.use(authenticate);
+app.use(requirePasswordChanged);
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !assertAllowedOrigin(req, res)) return;
   next();
 });
+// User lifecycle routes write their audit event atomically with the change.
+app.use('/users', requireAdmin, usersRouter);
+app.use('/employee', requireAdmin, employeeRouter);
 app.use(auditMutations);
 app.use(queueStaffChanges);
 
@@ -47,7 +52,6 @@ app.use('/gold', goldRouter);
 app.use('/inquiries', inquiriesRouter);
 app.use('/sales', salesRouter);
 app.use('/client', clientRouter);
-app.use('/employee', requireAdmin, employeeRouter);
 app.use('/expenses', expensesRouter);
 app.use('/inventory', inventoryRouter);
 app.use('/job_costing', jobCostingRouter);

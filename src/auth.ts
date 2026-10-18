@@ -8,6 +8,7 @@ export interface AuthUser {
   userName: string;
   empRole: string;
   sessionId: string;
+  mustChangePassword: boolean;
 }
 
 declare global {
@@ -82,10 +83,11 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
   try {
     const session = await prisma.authSession.findFirst({
       where: { id: payload.jti, empId: payload.sub, revokedAt: null, expiresAt: { gt: new Date() } },
-      include: { employee: { select: { empId: true, empName: true, userName: true, empRole: true, deletedAt: true } } },
+      include: { employee: { select: { empId: true, empName: true, userName: true, empRole: true, deletedAt: true, mustChangePassword: true, tempPasswordExpiresAt: true } } },
     });
-    if (!session || session.employee.deletedAt) { res.status(401).json({ error: 'Your session has ended. Please sign in again.' }); return; }
-    req.user = { ...session.employee, sessionId: session.id };
+    if (!session || session.employee.deletedAt || (session.employee.mustChangePassword && (!session.employee.tempPasswordExpiresAt || session.employee.tempPasswordExpiresAt <= new Date()))) { res.status(401).json({ error: 'Your session has ended. Please sign in again.' }); return; }
+    const { deletedAt, tempPasswordExpiresAt, ...user } = session.employee;
+    req.user = { ...user, sessionId: session.id };
     next();
   } catch (error) {
     console.error('Session verification failed:', error);
@@ -111,4 +113,9 @@ export function assertAllowedOrigin(req: Request, res: Response): boolean {
   if (!origin || isAllowedOrigin(origin)) return true;
   res.status(403).json({ error: 'Request origin is not allowed.' });
   return false;
+}
+
+export function requirePasswordChanged(req: Request, res: Response, next: NextFunction): void {
+  if (req.user?.mustChangePassword) { res.status(403).json({ error: 'Set your password before continuing.', code: 'PASSWORD_CHANGE_REQUIRED' }); return; }
+  next();
 }

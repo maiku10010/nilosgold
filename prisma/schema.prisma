@@ -78,6 +78,9 @@ model Employee {
   userName  String    @unique
   password  String
   deletedAt DateTime?
+  mustChangePassword Boolean @default(false)
+  tempPasswordExpiresAt DateTime?
+  lastLoginAt DateTime?
 
   jobs             Job_Cost[]
   sessions         AuthSession[]

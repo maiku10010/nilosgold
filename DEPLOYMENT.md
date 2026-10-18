@@ -29,3 +29,31 @@ the API returns 503 and the UI asks for a verified manual job-costing rate.
 The automated suite covers primary/backup responses, unit conversion, cache
 coalescing, stale/error handling, invalid payloads, and credential destination.
 The public health route checks application startup, not database connectivity.
+
+## User management
+
+The `user_management` Supabase migration adds `mustChangePassword`,
+`tempPasswordExpiresAt`, and `lastLoginAt` on `employees`. Apply it before the
+API release. It was applied to the active Singapore database for this release.
+Existing bcrypt credentials are retained.
+
+Admins manage accounts at `/users`; `/employee` is a compatibility alias with
+legacy PUT/DELETE operations disabled. Creation and reset return a newly generated
+32-character temporary password once, with `Cache-Control: no-store`; only its
+bcrypt hash is stored. There is no password retrieval or email flow.
+Temporary passwords expire after 24 hours and are consumed at login. The resulting
+restricted session can only set a password, read its own identity, or sign out.
+If that session is lost before setup completes, an admin must reset the password
+again. Passwords require 12 characters and at most 72 UTF-8 bytes.
+
+Role/status/credential changes and login redemption share a PostgreSQL transaction
+advisory lock. This protects concurrent admin changes and temp-password redemption.
+Creation, reset, role/status changes and self password changes persist their audit
+event inside the same transaction. Password changes rotate the current session;
+reset, deactivation and role changes revoke existing sessions. Accounts remain in
+`employees` so historical relations and names survive deactivation.
+
+`tests/user-management.test.cjs` exercises HTTP flows with a transactional database
+fixture, including replay/expiry, forced setup, staff access, session revocation,
+self/last-admin rules, concurrent admin changes, legacy endpoint protection, and
+audit failure rollback. No real user credentials are used in tests.
