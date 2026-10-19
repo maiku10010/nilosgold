@@ -4,7 +4,7 @@ exports.databaseConfig = databaseConfig;
 /** Keep demo credentials pinned to their own Supabase project and verify TLS. */
 function databaseConfig(connectionString, env = process.env) {
     const url = new URL(connectionString);
-    const project = env.DEMO_SUPABASE_PROJECT_REF;
+    const project = env.DEMO_SUPABASE_PROJECT_REF || (env.VERCEL_GIT_COMMIT_REF === 'feature/white-label-demo' ? 'kzupjvycvcspinpctmty' : undefined);
     if (project) {
         const direct = url.hostname === `db.${project}.supabase.co`;
         const pooled = url.hostname.endsWith('.pooler.supabase.com') && decodeURIComponent(url.username).endsWith(`.${project}`);

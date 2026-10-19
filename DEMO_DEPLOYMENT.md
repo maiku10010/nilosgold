@@ -30,11 +30,13 @@ verification remains enabled. A public copy of that CA is in `certs/` for local
 reference (not a secret).
 
 The frontend is pinned with `VITE_DEMO_API_ORIGIN=https://golddemo-api.vercel.app`.
-An API URL mismatch fails the build and client startup. Its public Supabase URL
+An API URL mismatch fails the build and client startup. The demo Git branch also
+uses these pins automatically when inherited shop project variables omit them. Its public Supabase URL
 and key also belong only to GoldDemo. No production credentials were copied.
 The `.vercelignore` excludes historical imported datasets and local env files.
 
 Private generated setup/login credentials are in the ignored `.env.demo.local`.
+A simpler login-only copy is saved in ignored `outputs/demo-login.txt`.
 Do not commit this file or paste its database/session secrets into chat. Demo
 usernames remain `demo.admin`, `demo.staff`, and `demo.maker`.
 
@@ -109,7 +111,9 @@ shop projects or copying their environment variables:
 | GoldDemo API (`golddemo-api`) | API repository / `feature/white-label-demo` | `npm run vercel-build` | Express |
 
 Use each repository root and `npm ci`. Existing `vercel.json` files supply the
-build settings. In each new project's Git/Production environment settings, set
+build settings. These projects were created independently and deployed from explicit Git source
+commits. They do not yet have automatic Git integration linked. To enable it,
+connect the matching repository in each new project's Git settings and set
 the production branch to `feature/white-label-demo`. Never change the production
 branch or credentials of the existing shop projects. Choose a Singapore function
 region for the new API, near its new Supabase database.
@@ -146,7 +150,9 @@ provides. Do not point any production shop hostname to the demo.
 
 ## Verification
 
-Run `npm run check` in both repositories. The API check includes seed TypeScript
+Run `npm run check` in both repositories. Run `node scripts/verify-demo.cjs` from
+the API repository for authenticated live demo checks using the private local
+env file; it also saves the login-only file. The API check includes seed TypeScript
 validation and uses mocked databases for HTTP tests; it never seeds a live DB.
 After deployment, verify `/health`, admin/staff login, each module's data, creating
 an inquiry and job, stock allocation, sale/payment balances, approval permissions,

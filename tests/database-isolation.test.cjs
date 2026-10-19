@@ -22,6 +22,10 @@ test('demo rejects a different public Supabase endpoint', () => {
   assert.throws(() => databaseConfig(`postgresql://user:pass@db.${ref}.supabase.co/postgres`, { ...env, NEXT_PUBLIC_SUPABASE_URL: 'https://other.supabase.co' }), /API URL does not match/);
 });
 
+test('demo branch rejects inherited shop credentials even without an explicit pin', () => {
+  assert.throws(() => databaseConfig('postgresql://user:pass@db.zbckqjrlaeozkzdpvtog.supabase.co/postgres', { VERCEL_GIT_COMMIT_REF: 'feature/white-label-demo' }), /does not match/);
+});
+
 test('custom CA keeps certificate verification enabled and removes conflicting URL TLS options', () => {
   const config = databaseConfig(`postgresql://user:pass@db.${ref}.supabase.co/postgres?sslmode=no-verify&sslrootcert=other&application_name=demo`, { ...env, DATABASE_SSL_CA: 'test CA' });
   assert.deepEqual(config.ssl, { ca: 'test CA', rejectUnauthorized: true });
