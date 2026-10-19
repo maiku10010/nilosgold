@@ -13,6 +13,7 @@ exports.authenticate = authenticate;
 exports.requireAdmin = requireAdmin;
 exports.isAllowedOrigin = isAllowedOrigin;
 exports.assertAllowedOrigin = assertAllowedOrigin;
+exports.requirePasswordChanged = requirePasswordChanged;
 const node_crypto_1 = __importDefault(require("node:crypto"));
 const db_1 = require("./db");
 const COOKIE_NAME = 'nilo_session';
@@ -92,13 +93,14 @@ async function authenticate(req, res, next) {
     try {
         const session = await db_1.prisma.authSession.findFirst({
             where: { id: payload.jti, empId: payload.sub, revokedAt: null, expiresAt: { gt: new Date() } },
-            include: { employee: { select: { empId: true, empName: true, userName: true, empRole: true, deletedAt: true } } },
+            include: { employee: { select: { empId: true, empName: true, userName: true, empRole: true, deletedAt: true, mustChangePassword: true, tempPasswordExpiresAt: true } } },
         });
-        if (!session || session.employee.deletedAt) {
+        if (!session || session.employee.deletedAt || (session.employee.mustChangePassword && (!session.employee.tempPasswordExpiresAt || session.employee.tempPasswordExpiresAt <= new Date()))) {
             res.status(401).json({ error: 'Your session has ended. Please sign in again.' });
             return;
         }
-        req.user = { ...session.employee, sessionId: session.id };
+        const { deletedAt, tempPasswordExpiresAt, ...user } = session.employee;
+        req.user = { ...user, sessionId: session.id };
         next();
     }
     catch (error) {
@@ -125,4 +127,11 @@ function assertAllowedOrigin(req, res) {
         return true;
     res.status(403).json({ error: 'Request origin is not allowed.' });
     return false;
+}
+function requirePasswordChanged(req, res, next) {
+    if (req.user?.mustChangePassword) {
+        res.status(403).json({ error: 'Set your password before continuing.', code: 'PASSWORD_CHANGE_REQUIRED' });
+        return;
+    }
+    next();
 }

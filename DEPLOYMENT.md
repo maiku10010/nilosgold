@@ -3,7 +3,7 @@
 The Vercel project `nilosgold` deploys production automatically from GitHub `main`.
 It uses the Express framework preset, Node 24, `npm ci`, and `npm run vercel-build`.
 The build generates and validates Prisma, compiles TypeScript, and runs the test suite.
-No database migration is required for the inventory/contact/gold-rate release.
+Apply required database migrations before deploying their API changes.
 
 Run `npm run check` locally before pushing. The HTTP smoke test starts a temporary
 localhost server and checks health plus authentication boundaries. Tests use mocks
@@ -57,3 +57,17 @@ reset, deactivation and role changes revoke existing sessions. Accounts remain i
 fixture, including replay/expiry, forced setup, staff access, session revocation,
 self/last-admin rules, concurrent admin changes, legacy endpoint protection, and
 audit failure rollback. No real user credentials are used in tests.
+
+## Unknown inventory prices
+
+The `jewelry_inventory_unknown_prices` Supabase migration allows `inventory.unitPrice`
+to be NULL. Apply it before this API release. NULL preserves an unknown cost;
+it must never be converted to a known zero price. Inventory purchases with unknown
+prices are excluded from expenses until priced. An explicit NULL clears a price,
+while omitting the price during an update preserves its current value. The UI
+keeps unknown prices blank when editing stock and submits them as NULL.
+
+`data/imports/jewelry-inventory.sql` is a prepared, insert-only import of 36
+entries totaling 523 pieces. It uses stable source-based IDs to prevent duplicate
+inserts. It is separate from schema deployment and has not been applied by this
+review. Verify it against the original jewelry PDF before importing stock.

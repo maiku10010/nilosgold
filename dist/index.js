@@ -44,6 +44,7 @@ const inquiries_1 = __importDefault(require("./routes/inquiries"));
 const sales_1 = __importDefault(require("./routes/sales"));
 const client_1 = __importDefault(require("./routes/client"));
 const employee_1 = __importDefault(require("./routes/employee"));
+const users_1 = __importDefault(require("./routes/users"));
 const expenses_1 = __importDefault(require("./routes/expenses"));
 const inventory_1 = __importDefault(require("./routes/inventory"));
 const job_costing_1 = __importDefault(require("./routes/job_costing"));
@@ -64,11 +65,15 @@ app.use(express_1.default.json({ limit: '1mb' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok', message: 'Goldsmith Accounting API is running' }));
 app.use('/auth', auth_1.default);
 app.use(auth_2.authenticate);
+app.use(auth_2.requirePasswordChanged);
 app.use((req, res, next) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !(0, auth_2.assertAllowedOrigin)(req, res))
         return;
     next();
 });
+// User lifecycle routes write their audit event atomically with the change.
+app.use('/users', auth_2.requireAdmin, users_1.default);
+app.use('/employee', auth_2.requireAdmin, employee_1.default);
 app.use(audit_1.auditMutations);
 app.use(approvals_1.queueStaffChanges);
 // Reports, approvals, and audit history are administrator-only on the server.
@@ -80,7 +85,6 @@ app.use('/gold', gold_1.default);
 app.use('/inquiries', inquiries_1.default);
 app.use('/sales', sales_1.default);
 app.use('/client', client_1.default);
-app.use('/employee', auth_2.requireAdmin, employee_1.default);
 app.use('/expenses', expenses_1.default);
 app.use('/inventory', inventory_1.default);
 app.use('/job_costing', job_costing_1.default);

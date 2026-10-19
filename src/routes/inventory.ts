@@ -16,26 +16,26 @@ const unitsByCategory: Record<string, string[]> = {
   SCRAP: ['grams'], GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'],
   BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'],
 };
-type Movement = { category: typeof categories[number]; itemName: string; unit: string; goldKarat: number | null; quantityIn: number | Prisma.Decimal; quantityOut: number | Prisma.Decimal; quantityLoss: number | Prisma.Decimal; unitPrice: number; date?: Date };
-function parseMovement(body: any, existing?: { category: string; itemName: string; unit: string; goldKarat?: number | null }): Movement | string {
+type Movement = { category: typeof categories[number]; itemName: string; unit: string; goldKarat: number | null; quantityIn: number | Prisma.Decimal; quantityOut: number | Prisma.Decimal; quantityLoss: number | Prisma.Decimal; unitPrice: number | null; date?: Date };
+function parseMovement(body: any, existing?: { category: string; itemName: string; unit: string; goldKarat?: number | null; unitPrice?: Prisma.Decimal | null }): Movement | string {
   const category = String(body.category ?? existing?.category ?? 'GOLD').trim().toUpperCase();
   const itemName = String(body.itemName ?? existing?.itemName ?? '').trim();
   const unit = String(body.unit ?? existing?.unit ?? (category === 'GEMSTONES' ? 'carats' : category === 'BOXES' ? 'boxes' : category === 'TOOLS' || category === 'PACKAGING' || category === 'FINDINGS' ? 'pieces' : 'grams'));
   const quantityIn = body.quantityIn ?? body.goldIn ?? 0;
   const quantityOut = body.quantityOut ?? body.goldOut ?? 0;
   const quantityLoss = body.quantityLoss ?? body.scraps ?? body.scrap ?? 0;
-  const unitPrice = body.unitPrice ?? 0;
+  const unitPrice = body.unitPrice === undefined ? existing?.unitPrice === null ? null : existing?.unitPrice?.toString() : body.unitPrice;
   const goldKarat = body.goldKarat === undefined ? (existing?.goldKarat ?? null) : body.goldKarat === null || body.goldKarat === '' ? null : Number(body.goldKarat);
   if (!categories.includes(category as typeof categories[number])) return 'Choose a supported inventory category.';
   if (!unitsByCategory[category]?.includes(unit)) return `Choose a supported unit for ${category.toLowerCase()}.`;
   if (!itemName) return 'Enter an item description.';
   if (![quantityIn, quantityOut, quantityLoss].every(isNonNegativeNumber) || Number(quantityIn) + Number(quantityOut) + Number(quantityLoss) <= 0) return 'Enter a positive quantity for at least one movement.';
-  if (!isPositiveNumber(unitPrice)) return 'Unit price must be greater than zero.';
+  if (unitPrice !== null && !isPositiveNumber(unitPrice)) return 'Unit price must be greater than zero, or null when unknown.';
   if (category === 'GOLD' && goldKarat === null && !existing) return 'Choose a gold karat from 10K to 24K.';
   if (['GOLD', 'SCRAP'].includes(category) && goldKarat !== null && (!Number.isInteger(goldKarat) || goldKarat < 10 || goldKarat > 24)) return 'Gold karat must be a whole number from 10K to 24K.';
   if (!['GOLD', 'SCRAP'].includes(category) && goldKarat !== null) return 'Karat can only be set for gold or scrap inventory.';
   if (body.date !== undefined && !isValidNonFutureDate(body.date)) return 'Inventory date must be a valid date no later than today.';
-  return { category: category as Movement['category'], itemName, unit, goldKarat: ['GOLD', 'SCRAP'].includes(category) ? goldKarat : null, quantityIn: category === 'SCRAP' ? goldWeight(quantityIn) : Number(quantityIn), quantityOut: category === 'SCRAP' ? goldWeight(quantityOut) : Number(quantityOut), quantityLoss: category === 'SCRAP' ? goldWeight(quantityLoss) : Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
+  return { category: category as Movement['category'], itemName, unit, goldKarat: ['GOLD', 'SCRAP'].includes(category) ? goldKarat : null, quantityIn: category === 'SCRAP' ? goldWeight(quantityIn) : Number(quantityIn), quantityOut: category === 'SCRAP' ? goldWeight(quantityOut) : Number(quantityOut), quantityLoss: category === 'SCRAP' ? goldWeight(quantityLoss) : Number(quantityLoss), unitPrice: unitPrice === null ? null : Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
 }
 
 router.post('/', async (req: Request, res: Response) => {

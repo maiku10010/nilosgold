@@ -24,7 +24,7 @@ function parseMovement(body, existing) {
     const quantityIn = body.quantityIn ?? body.goldIn ?? 0;
     const quantityOut = body.quantityOut ?? body.goldOut ?? 0;
     const quantityLoss = body.quantityLoss ?? body.scraps ?? body.scrap ?? 0;
-    const unitPrice = body.unitPrice ?? 0;
+    const unitPrice = body.unitPrice === undefined ? existing?.unitPrice === null ? null : existing?.unitPrice?.toString() : body.unitPrice;
     const goldKarat = body.goldKarat === undefined ? (existing?.goldKarat ?? null) : body.goldKarat === null || body.goldKarat === '' ? null : Number(body.goldKarat);
     if (!categories.includes(category))
         return 'Choose a supported inventory category.';
@@ -34,8 +34,8 @@ function parseMovement(body, existing) {
         return 'Enter an item description.';
     if (![quantityIn, quantityOut, quantityLoss].every(validation_1.isNonNegativeNumber) || Number(quantityIn) + Number(quantityOut) + Number(quantityLoss) <= 0)
         return 'Enter a positive quantity for at least one movement.';
-    if (!(0, validation_1.isPositiveNumber)(unitPrice))
-        return 'Unit price must be greater than zero.';
+    if (unitPrice !== null && !(0, validation_1.isPositiveNumber)(unitPrice))
+        return 'Unit price must be greater than zero, or null when unknown.';
     if (category === 'GOLD' && goldKarat === null && !existing)
         return 'Choose a gold karat from 10K to 24K.';
     if (['GOLD', 'SCRAP'].includes(category) && goldKarat !== null && (!Number.isInteger(goldKarat) || goldKarat < 10 || goldKarat > 24))
@@ -44,7 +44,7 @@ function parseMovement(body, existing) {
         return 'Karat can only be set for gold or scrap inventory.';
     if (body.date !== undefined && !(0, validation_1.isValidNonFutureDate)(body.date))
         return 'Inventory date must be a valid date no later than today.';
-    return { category: category, itemName, unit, goldKarat: ['GOLD', 'SCRAP'].includes(category) ? goldKarat : null, quantityIn: category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(quantityIn) : Number(quantityIn), quantityOut: category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(quantityOut) : Number(quantityOut), quantityLoss: category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(quantityLoss) : Number(quantityLoss), unitPrice: Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
+    return { category: category, itemName, unit, goldKarat: ['GOLD', 'SCRAP'].includes(category) ? goldKarat : null, quantityIn: category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(quantityIn) : Number(quantityIn), quantityOut: category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(quantityOut) : Number(quantityOut), quantityLoss: category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(quantityLoss) : Number(quantityLoss), unitPrice: unitPrice === null ? null : Number(unitPrice), ...(body.date ? { date: new Date(body.date) } : {}) };
 }
 router.post('/', async (req, res) => {
     try {

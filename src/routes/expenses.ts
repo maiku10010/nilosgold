@@ -34,7 +34,7 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const [allExpenses, purchases] = await Promise.all([
       prisma.expenses.findMany({ where: { deletedAt: null }, orderBy: { expDate: 'desc' } }),
-      prisma.inventory.findMany({ where: { deletedAt: null, quantityIn: { gt: 0 } }, orderBy: { updatedAt: 'desc' } }),
+      prisma.inventory.findMany({ where: { deletedAt: null, quantityIn: { gt: 0 }, unitPrice: { not: null } }, orderBy: { updatedAt: 'desc' } }),
     ]);
     const inventoryExpenses = purchases.map(row => ({
       expenseId: `inventory-${row.referenceId}`, category: `Inventory · ${row.category}`,

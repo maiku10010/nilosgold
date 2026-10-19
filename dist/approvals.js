@@ -65,6 +65,10 @@ function normalizedChanges(body, spec, serviceType) {
         }
         if (raw === undefined)
             continue;
+        if (spec.entity === 'INVENTORY' && key === 'unitPrice' && raw === null) {
+            changes[key] = null;
+            continue;
+        }
         if (spec.entity === 'JOB_COST' && key === 'stoneCost') {
             changes[key] = (0, jobCostingSchema_1.parseStoneCost)(raw);
             continue;
@@ -310,9 +314,10 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
             const current = await tx.inventory.findUnique({ where: { referenceId: id } });
             if (!current)
                 throw new Error('Inventory entry is no longer active.');
-            const unitPrice = Number(changes.unitPrice ?? current.unitPrice);
-            if (!Number.isFinite(unitPrice) || unitPrice <= 0)
-                throw new Error('Unit price must be greater than zero.');
+            const rawPrice = changes.unitPrice === undefined ? current.unitPrice : changes.unitPrice;
+            const unitPrice = rawPrice === null ? null : Number(rawPrice);
+            if (unitPrice !== null && (!Number.isFinite(unitPrice) || unitPrice <= 0))
+                throw new Error('Unit price must be greater than zero, or null when unknown.');
             const category = String(changes.category ?? current.category);
             const quantityIn = category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(changes.quantityIn ?? changes.goldIn ?? current.quantityIn) : Number(changes.quantityIn ?? changes.goldIn ?? current.quantityIn);
             const quantityOut = category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(changes.quantityOut ?? changes.goldOut ?? current.quantityOut) : Number(changes.quantityOut ?? changes.goldOut ?? current.quantityOut);
@@ -321,7 +326,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                     ...(changes.itemName !== undefined ? { itemName: changes.itemName } : {}),
                     category,
                     quantityIn, quantityOut, quantityLoss,
-                    ...(changes.unitPrice !== undefined ? { unitPrice: changes.unitPrice } : {}),
+                    ...(changes.unitPrice !== undefined ? { unitPrice } : {}),
                     ...(changes.unit !== undefined ? { unit: changes.unit } : {}),
                     updatedAt: date('updatedAt') ?? date('date') ?? new Date(),
                 } });
