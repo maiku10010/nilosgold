@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { PrismaClient, InquiryStatus, JobStatus, SalesStatus, InventoryCategory } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { hash } from 'bcryptjs';
+import { databaseConfig } from '../src/databaseConfig';
 
 async function main() {
   const url = process.env.DIRECT_URL;
@@ -10,7 +11,7 @@ async function main() {
   }
   const password = process.env.DEMO_ADMIN_PASSWORD;
   if (!password || password.length < 12 || Buffer.byteLength(password, 'utf8') > 72) throw new Error('Set DEMO_ADMIN_PASSWORD to a private 12–72 byte password.');
-  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: url, max: 1 }) });
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ ...databaseConfig(url), max: 1 }) });
   const passwordHash = await hash(password, 12);
   const date = (daysAgo: number) => { const d = new Date(); d.setUTCDate(d.getUTCDate() - daysAgo); d.setUTCHours(4, 0, 0, 0); return d; };
   try {
@@ -73,11 +74,11 @@ async function main() {
         { name: '18K gold', category: 'GOLD', unit: 'grams', price: 5500, quantity: 100, karat: 18 },
         { name: '24K gold', category: 'GOLD', unit: 'grams', price: 7300, quantity: 25, karat: 24 },
         { name: 'Sterling silver', category: 'SILVER', unit: 'grams', price: 95, quantity: 250 },
-        { name: 'Velvet ring box', category: 'BOXES', unit: 'pcs', price: 85, quantity: 60 },
-        { name: 'Gift pouch', category: 'PACKAGING', unit: 'pcs', price: 25, quantity: 120 },
-        { name: 'Round zircon', category: 'GEMSTONES', unit: 'pcs', price: 300, quantity: 40 },
-        { name: 'Silver clasp', category: 'FINDINGS', unit: 'pcs', price: 45, quantity: 50 },
-        { name: 'Polishing wheel', category: 'TOOLS', unit: 'pcs', price: 350, quantity: 6 },
+        { name: 'Velvet ring box', category: 'BOXES', unit: 'pieces', price: 85, quantity: 60 },
+        { name: 'Gift pouch', category: 'PACKAGING', unit: 'pieces', price: 25, quantity: 120 },
+        { name: 'Round zircon', category: 'GEMSTONES', unit: 'pieces', price: 300, quantity: 40 },
+        { name: 'Silver clasp', category: 'FINDINGS', unit: 'pieces', price: 45, quantity: 50 },
+        { name: 'Polishing wheel', category: 'TOOLS', unit: 'pieces', price: 350, quantity: 6 },
       ];
       for (const [i, item] of stock.entries()) await tx.inventory.create({ data: { referenceId: `DEMO-STOCK${i}`, itemName: item.name, category: item.category, goldKarat: item.karat, unit: item.unit, unitPrice: item.price, quantityIn: item.quantity, updatedAt: date(45) } });
       const costs = [['Rent', 18000], ['Utilities', 3400], ['Transport', 450], ['Supplies', 1600]] as const;

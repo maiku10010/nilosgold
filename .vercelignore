@@ -1,0 +1,8 @@
+.env*
+data/
+outputs/
+scripts/*import*
+scripts/*workbook*
+scripts/*inventory*
+scripts/extract-workbook.py
+certs/

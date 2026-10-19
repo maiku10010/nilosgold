@@ -5,6 +5,7 @@ const client_1 = require("@prisma/client");
 const pg_1 = require("pg");
 const adapter_pg_1 = require("@prisma/adapter-pg");
 require("dotenv/config");
+const databaseConfig_1 = require("./databaseConfig");
 function runtimeDatabaseUrl() {
     const configuredUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL;
     if (!configuredUrl)
@@ -24,7 +25,7 @@ function runtimeDatabaseUrl() {
 // A serverless invocation only needs one database connection. Keeping this at
 // one prevents every warm Vercel instance from opening pg's default ten.
 const pool = new pg_1.Pool({
-    connectionString: runtimeDatabaseUrl(),
+    ...(0, databaseConfig_1.databaseConfig)(runtimeDatabaseUrl()),
     max: process.env.VERCEL === '1' ? 1 : 10,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,

@@ -7,16 +7,36 @@ Vite explicitly exposes only `VITE_*` and `NEXT_PUBLIC_*` variables to browser c
 
 ## Provisioning status
 
-Creating **GoldDemo** in **maiku10010's Org**, Singapore, was attempted on
-2026-10-20. Supabase rejected it because the account has reached its two active
-free-project limit. No project was created and no existing database was modified.
-Make a project slot available or upgrade through Supabase, then create the new
-project. Do not reuse the shop database for this demo.
+Provisioned on 2026-10-20:
 
-The requested address is `https://goldsmith.vercel.app`. This is a Vercel-owned
-subdomain, subject to availability, rather than a custom DNS domain. It has not
-been claimed or deployed. If unavailable, use the assigned project domain or a
-domain you own, and update CORS and the UI API URL accordingly.
+- Supabase: **GoldDemo**, Singapore, project `kzupjvycvcspinpctmty`.
+- Vercel API: **golddemo-api**, https://golddemo-api.vercel.app.
+- Vercel UI: **golddemo**, https://golddemo-five.vercel.app.
+- `goldsmith.vercel.app` is owned by another team and could not be assigned.
+- The older `nilosgold-db` was paused with the user's authorization to free a slot.
+  **nilosgold-db-singapore** remains running and was not modified.
+
+The new database was initialized from the schema snapshot and seeded with mock
+records only. Verification found zero non-DEMO IDs across every business module.
+All 13 public tables have RLS enabled; anon/authenticated grants are revoked.
+The security advisor reports only informational no-policy notices, intentional
+for this API-only design (see [Supabase's explanation](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy)).
+
+The API uses its own `golddemo_api` database role, fresh credentials, and a fresh
+AUTH_SECRET, stored as encrypted Vercel variables. It cannot use either shop
+connection when `DEMO_SUPABASE_PROJECT_REF=kzupjvycvcspinpctmty` is set. Verified
+TLS uses the official Supabase CA supplied through `DATABASE_SSL_CA`; certificate
+verification remains enabled. A public copy of that CA is in `certs/` for local
+reference (not a secret).
+
+The frontend is pinned with `VITE_DEMO_API_ORIGIN=https://golddemo-api.vercel.app`.
+An API URL mismatch fails the build and client startup. Its public Supabase URL
+and key also belong only to GoldDemo. No production credentials were copied.
+The `.vercelignore` excludes historical imported datasets and local env files.
+
+Private generated setup/login credentials are in the ignored `.env.demo.local`.
+Do not commit this file or paste its database/session secrets into chat. Demo
+usernames remain `demo.admin`, `demo.staff`, and `demo.maker`.
 
 ## Fresh database setup
 
@@ -76,8 +96,7 @@ union all select 'audit', count(*) from system_logs;
 select tablename, rowsecurity from pg_tables where schemaname = 'public';
 ```
 
-Run Supabase's database security advisors after provisioning. Live bootstrap,
-seed, and database verification remain blocked by the project quota.
+Run Supabase's database security advisors after provisioning. Bootstrap, seed, and isolation queries were verified on the new project.
 
 ## Vercel projects and branch
 
@@ -99,13 +118,14 @@ Configure **API Production** variables from the new instance:
 
 - `DATABASE_URL`, `DIRECT_URL`, `NEXT_PUBLIC_APP_NAME=GoldDemo`.
 - A fresh `AUTH_SECRET` (32+ random characters), `AUTH_COOKIE_NAME=goldsmith_demo_session`.
-- `CORS_ORIGIN=https://goldsmith.vercel.app` plus the actual assigned UI project
+- `CORS_ORIGIN=https://golddemo-five.vercel.app` plus the actual assigned UI project
   domain if needed. Origins are exact; add any preview URL explicitly to the API
   preview environment to test it.
 - Optional `APP_CONTACT`, `APP_RECEIPT_FOOTER`, and server-only `GOLD_API_KEY`.
 - Leave `RESEND_API_KEY` and `EMAIL_FROM` unset until a separate demo sender is
   verified. Then set `EMAIL_FROM=GoldDemo <receipts@your-verified-domain>`.
-- Omit `DEMO_*` variables. Seeding and schema bootstrap never run in build/start.
+- Set `DEMO_SUPABASE_PROJECT_REF` to the new project reference. Omit local setup
+  variables `DEMO_ALLOW_SEED`, `DEMO_DATABASE_HOST`, and `DEMO_ADMIN_PASSWORD`. Seeding and schema bootstrap never run in build/start.
 
 Configure **UI Production** variables:
 
@@ -113,14 +133,14 @@ Configure **UI Production** variables:
 - `NEXT_PUBLIC_APP_LOGO=/demo-logo.svg` (generic asset shipped in `public/`).
   You may place `demo-logo.png` there and set this variable to `/demo-logo.png`.
 - `VITE_API_BASE_URL=https://<actual-new-api-domain>` without a trailing slash.
+  Also set `VITE_DEMO_API_ORIGIN` to exactly the same URL.
   This is required for the separate API deployment; `/api` is the local fallback.
 - Optional new `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
   Never add database URLs, passwords, or other secrets to the UI environment.
 
 Deploy the API after bootstrap/seed, then build/deploy the UI with its final API
 URL. Public branding and URLs are embedded at build time; redeploy after changes.
-Under the new UI project's Domains settings, assign `goldsmith.vercel.app` if
-available. If Vercel cannot assign it, choose an available Vercel subdomain. For
+Under the new UI project's Domains settings, use the assigned `golddemo-five.vercel.app`. `goldsmith.vercel.app` is unavailable. If Vercel cannot assign it, choose an available Vercel subdomain. For
 a purchased custom domain, add it there and use the exact DNS records Vercel
 provides. Do not point any production shop hostname to the demo.
 
