@@ -7,6 +7,7 @@ import { receiptEmail, sendSystemEmail } from '../services/email';
 import { friendlyId } from '../friendlyId';
 import { validateInventoryLedger } from '../inventoryLedger';
 import { setSalePaidTotal, withSaleTotals } from '../accounting';
+import { updateSaleJobStatus } from '../saleJobStatus';
 
 const router = Router();
 const serviceTypes = ['Custom', 'Repair', 'Resize', 'Cleaning'];
@@ -134,6 +135,21 @@ router.post('/:invoiceId/receipt', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error sending receipt:', error);
     res.status(500).json({ error: 'Receipt could not be sent.' });
+  }
+});
+
+router.patch('/:invoiceId', async (req: Request, res: Response) => {
+  try {
+    if (!req.body || Object.keys(req.body).some(key => key !== 'jobStatus')) return res.status(400).json({ error: 'Only job status can be changed here.' });
+    const invoiceId = String(req.params.invoiceId);
+    const saved = await prisma.$transaction(async tx => {
+      await updateSaleJobStatus(tx, invoiceId, req.body.jobStatus);
+      return withSaleTotals(await tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes }));
+    });
+    res.json(saved);
+  } catch (error) {
+    const code = Number((error as { statusCode?: number }).statusCode) || 500;
+    res.status(code).json({ error: code === 500 ? 'Job status could not be updated.' : (error as Error).message });
   }
 });
 

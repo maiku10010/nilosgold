@@ -9,6 +9,7 @@ const email_1 = require("../services/email");
 const friendlyId_1 = require("../friendlyId");
 const inventoryLedger_1 = require("../inventoryLedger");
 const accounting_1 = require("../accounting");
+const saleJobStatus_1 = require("../saleJobStatus");
 const router = (0, express_1.Router)();
 const serviceTypes = ['Custom', 'Repair', 'Resize', 'Cleaning'];
 const saleIncludes = { client: true, job: { include: { inquiry: true } }, payments: true };
@@ -135,6 +136,22 @@ router.post('/:invoiceId/receipt', async (req, res) => {
     catch (error) {
         console.error('Error sending receipt:', error);
         res.status(500).json({ error: 'Receipt could not be sent.' });
+    }
+});
+router.patch('/:invoiceId', async (req, res) => {
+    try {
+        if (!req.body || Object.keys(req.body).some(key => key !== 'jobStatus'))
+            return res.status(400).json({ error: 'Only job status can be changed here.' });
+        const invoiceId = String(req.params.invoiceId);
+        const saved = await db_1.prisma.$transaction(async (tx) => {
+            await (0, saleJobStatus_1.updateSaleJobStatus)(tx, invoiceId, req.body.jobStatus);
+            return (0, accounting_1.withSaleTotals)(await tx.sales.findUniqueOrThrow({ where: { invoiceId }, include: saleIncludes }));
+        });
+        res.json(saved);
+    }
+    catch (error) {
+        const code = Number(error.statusCode) || 500;
+        res.status(code).json({ error: code === 500 ? 'Job status could not be updated.' : error.message });
     }
 });
 router.put('/:invoiceId', async (req, res) => {

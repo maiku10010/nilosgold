@@ -11,6 +11,7 @@ import { friendlyId } from './friendlyId';
 import { isTodayOrFutureDate, isValidPHContact } from './validation';
 import { InventoryCategory } from '@prisma/client';
 import { paidTotal, setSalePaidTotal } from './accounting';
+import { updateSaleJobStatus, validSaleJobStatus } from './saleJobStatus';
 import { goldWeight, syncGoldAllocation, releaseGoldAllocation, reverseJobInventory, restoreScrapRecovery } from './goldAllocation';
 
 type Entity = 'SALE' | 'JOB_COST' | 'INQUIRY' | 'EXPENSE' | 'INVENTORY' | 'CLIENT';
@@ -23,7 +24,7 @@ function requestSpec(req: Request): Spec | null {
   if (segments.length !== 2 || !segments[1]) return null;
   const [resource, id] = segments;
   const resourceSpecs: Record<string, { entity: Entity; allowed: string[] }> = {
-    sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'payment', 'salesDate', 'date', 'clientName', 'contactNum', 'email'] },
+    sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'payment', 'salesDate', 'date', 'clientName', 'contactNum', 'email', 'jobStatus'] },
     'job-cost': { entity: 'JOB_COST', allowed: ['goldSourceId', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
     job_costing: { entity: 'JOB_COST', allowed: ['goldSourceId', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
     inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'isFullyPaid', 'date', 'inqDate'] },
@@ -42,7 +43,10 @@ function json(value: unknown): Prisma.InputJsonValue {
 
 async function findCurrent(entity: Entity, id: string): Promise<any> {
   switch (entity) {
-    case 'SALE': return prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true, payments: true, job: { include: { inventoryMovement: true } } } });
+    case 'SALE': {
+      const sale = await prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true, payments: true, job: { include: { inventoryMovement: true } } } });
+      return sale ? { ...sale, jobStatus: sale.job?.status } : null;
+    }
     case 'JOB_COST': {
       const job = await prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } }, inventoryMovement: true } });
       if (!job) return null;
@@ -75,7 +79,10 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec, serviceTyp
       changes[key] = goldWeight(raw).toString();
       continue;
     }
-    if (numericFields.has(key)) {
+    if (key === 'jobStatus') {
+      if (!validSaleJobStatus(raw)) throw new Error('Choose a valid job status.');
+      changes[key] = raw;
+    } else if (numericFields.has(key)) {
       const value = spec.entity === 'JOB_COST' ? roundTwo(raw) : Number(raw);
       if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0)) throw new Error(`Enter a valid ${key}.`);
       changes[key] = value;
@@ -134,7 +141,7 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
         const units: Record<string, string[]> = { SCRAP: ['grams'], GOLD: ['grams', 'troy oz'], SILVER: ['grams'], GEMSTONES: ['carats', 'pieces'], BOXES: ['boxes', 'pieces'], PACKAGING: ['pieces', 'boxes'], FINDINGS: ['pieces', 'grams'], TOOLS: ['pieces'] };
         if (!units[category] || !units[category].includes(unit)) { res.status(400).json({ error: 'Choose a supported category and unit combination.' }); return; }
       }
-      if (spec.entity === 'SALE') {
+      if (spec.entity === 'SALE' && ('price' in proposedData || 'payment' in proposedData)) {
         const nextPrice = Number(proposedData.price ?? current.price);
         const nextPayment = Number(proposedData.payment ?? paidTotal(current.payments));
         if (nextPayment > nextPrice) { res.status(400).json({ error: 'Payment cannot exceed the sale price.' }); return; }
@@ -166,6 +173,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
   const date = (key: string) => changes[key] ? new Date(String(changes[key])) : undefined;
   switch (request.entityType as Entity) {
     case 'SALE': {
+      if (changes.jobStatus !== undefined) await updateSaleJobStatus(tx, id, changes.jobStatus);
       const sale = await tx.sales.findFirst({ where: { invoiceId: id, deletedAt: null } });
       if (!sale) throw new Error('Sale is no longer active.');
       await tx.sales.update({ where: { invoiceId: id }, data: {

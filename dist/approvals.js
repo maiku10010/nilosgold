@@ -12,6 +12,7 @@ const audit_1 = require("./audit");
 const inventoryLedger_1 = require("./inventoryLedger");
 const validation_1 = require("./validation");
 const accounting_1 = require("./accounting");
+const saleJobStatus_1 = require("./saleJobStatus");
 const goldAllocation_1 = require("./goldAllocation");
 const contextFields = new Set(['invoiceId', 'jobCostId', 'referenceId', 'inquiryId', 'expenseId', 'clientId', 'clientName']);
 function requestSpec(req) {
@@ -20,7 +21,7 @@ function requestSpec(req) {
         return null;
     const [resource, id] = segments;
     const resourceSpecs = {
-        sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'payment', 'salesDate', 'date', 'clientName', 'contactNum', 'email'] },
+        sales: { entity: 'SALE', allowed: ['serviceType', 'price', 'payment', 'salesDate', 'date', 'clientName', 'contactNum', 'email', 'jobStatus'] },
         'job-cost': { entity: 'JOB_COST', allowed: ['goldSourceId', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
         job_costing: { entity: 'JOB_COST', allowed: ['goldSourceId', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'empId', 'sellingPrice', 'itemName', 'deadline', 'deliveryDate'] },
         inquiries: { entity: 'INQUIRY', allowed: ['customerName', 'contactInfo', 'email', 'details', 'category', 'quotedPrice', 'isFullyPaid', 'date', 'inqDate'] },
@@ -37,7 +38,10 @@ function json(value) {
 }
 async function findCurrent(entity, id) {
     switch (entity) {
-        case 'SALE': return db_1.prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true, payments: true, job: { include: { inventoryMovement: true } } } });
+        case 'SALE': {
+            const sale = await db_1.prisma.sales.findFirst({ where: { invoiceId: id, deletedAt: null }, include: { client: true, payments: true, job: { include: { inventoryMovement: true } } } });
+            return sale ? { ...sale, jobStatus: sale.job?.status } : null;
+        }
         case 'JOB_COST': {
             const job = await db_1.prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } }, inventoryMovement: true } });
             if (!job)
@@ -81,7 +85,12 @@ function normalizedChanges(body, spec, serviceType) {
             changes[key] = (0, goldAllocation_1.goldWeight)(raw).toString();
             continue;
         }
-        if (numericFields.has(key)) {
+        if (key === 'jobStatus') {
+            if (!(0, saleJobStatus_1.validSaleJobStatus)(raw))
+                throw new Error('Choose a valid job status.');
+            changes[key] = raw;
+        }
+        else if (numericFields.has(key)) {
             const value = spec.entity === 'JOB_COST' ? (0, rounding_1.roundTwo)(raw) : Number(raw);
             if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0))
                 throw new Error(`Enter a valid ${key}.`);
@@ -179,7 +188,7 @@ async function queueStaffChanges(req, res, next) {
                     return;
                 }
             }
-            if (spec.entity === 'SALE') {
+            if (spec.entity === 'SALE' && ('price' in proposedData || 'payment' in proposedData)) {
                 const nextPrice = Number(proposedData.price ?? current.price);
                 const nextPayment = Number(proposedData.payment ?? (0, accounting_1.paidTotal)(current.payments));
                 if (nextPayment > nextPrice) {
@@ -223,6 +232,8 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
     const date = (key) => changes[key] ? new Date(String(changes[key])) : undefined;
     switch (request.entityType) {
         case 'SALE': {
+            if (changes.jobStatus !== undefined)
+                await (0, saleJobStatus_1.updateSaleJobStatus)(tx, id, changes.jobStatus);
             const sale = await tx.sales.findFirst({ where: { invoiceId: id, deletedAt: null } });
             if (!sale)
                 throw new Error('Sale is no longer active.');
