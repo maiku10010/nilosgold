@@ -16,7 +16,7 @@ exports.assertAllowedOrigin = assertAllowedOrigin;
 exports.requirePasswordChanged = requirePasswordChanged;
 const node_crypto_1 = __importDefault(require("node:crypto"));
 const db_1 = require("./db");
-const COOKIE_NAME = 'nilo_session';
+const COOKIE_NAME = process.env.AUTH_COOKIE_NAME || 'goldsmith_session';
 const SESSION_MS = 12 * 60 * 60 * 1000;
 function isAdminRole(role) {
     return role?.trim().toLowerCase() === 'admin';
@@ -115,11 +115,10 @@ function requireAdmin(req, res, next) {
     }
     next();
 }
-const vercelUiDeploymentOrigin = /^https:\/\/nilosgoldui-[a-z0-9-]+-myk-paul-edison-fugatas-projects\.vercel\.app$/i;
 function isAllowedOrigin(origin) {
-    const allowed = (process.env.CORS_ORIGIN ?? 'http://localhost:5173,https://nilosgoldui.vercel.app')
+    const allowed = (process.env.CORS_ORIGIN ?? 'http://localhost:5173')
         .split(',').map(item => item.trim()).filter(Boolean);
-    return allowed.includes(origin) || vercelUiDeploymentOrigin.test(origin);
+    return allowed.includes(origin);
 }
 function assertAllowedOrigin(req, res) {
     const origin = req.header('origin');

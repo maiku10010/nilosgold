@@ -1,3 +1,4 @@
+import { brand } from './brand';
 import express from 'express';
 import cors from 'cors';
 import 'dotenv/config';
@@ -28,7 +29,7 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 
 // Public health and sign-in routes. All business and report APIs require a valid session.
-app.get('/health', (_req, res) => res.json({ status: 'ok', message: 'Goldsmith Accounting API is running' }));
+app.get('/health', (_req, res) => res.json({ status: 'ok', message: `${brand.name} API is running` }));
 app.use('/auth', authRouter);
 app.use(authenticate);
 app.use(requirePasswordChanged);
@@ -70,7 +71,7 @@ const PORT = process.env.PORT || 3000;
 // Vercel imports this handler as a serverless function; local runs still listen on PORT.
 if (process.env.VERCEL !== '1') {
   app.listen(PORT, () => {
-    console.log(`Goldsmith Master Control API running on http://localhost:${PORT}`);
+    console.log(`${brand.name} API running on http://localhost:${PORT}`);
   });
 }
 

@@ -5,6 +5,7 @@ import { defineConfig, env } from "prisma/config";
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
+  migrations: { path: "prisma/migrations", seed: "ts-node --project prisma/tsconfig.seed.json prisma/seed.ts" },
   datasource: {
     // We use the direct connection for building the database!
     url: env("DIRECT_URL"), 

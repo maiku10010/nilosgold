@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const brand_1 = require("./brand");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 require("dotenv/config");
@@ -62,7 +63,7 @@ app.use((0, cors_1.default)({
 }));
 app.use(express_1.default.json({ limit: '1mb' }));
 // Public health and sign-in routes. All business and report APIs require a valid session.
-app.get('/health', (_req, res) => res.json({ status: 'ok', message: 'Goldsmith Accounting API is running' }));
+app.get('/health', (_req, res) => res.json({ status: 'ok', message: `${brand_1.brand.name} API is running` }));
 app.use('/auth', auth_1.default);
 app.use(auth_2.authenticate);
 app.use(auth_2.requirePasswordChanged);
@@ -101,7 +102,7 @@ const PORT = process.env.PORT || 3000;
 // Vercel imports this handler as a serverless function; local runs still listen on PORT.
 if (process.env.VERCEL !== '1') {
     app.listen(PORT, () => {
-        console.log(`Goldsmith Master Control API running on http://localhost:${PORT}`);
+        console.log(`${brand_1.brand.name} API running on http://localhost:${PORT}`);
     });
 }
 exports.default = app;

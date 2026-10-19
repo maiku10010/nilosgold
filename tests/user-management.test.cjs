@@ -140,7 +140,7 @@ test('user lifecycle HTTP flows enforce credentials, sessions, access and atomic
     // An audit failure rolls the account creation back.
     const activeAdmin = employees.find(row => !row.deletedAt && row.empRole === 'Admin');
     const activeSession = sessions.find(row => row.empId === activeAdmin.empId && !row.revokedAt);
-    const cookie = 'nilo_session=' + createSessionToken(activeAdmin.empId, activeSession.id, activeSession.expiresAt);
+    const cookie = 'goldsmith_session=' + createSessionToken(activeAdmin.empId, activeSession.id, activeSession.expiresAt);
     failAudit = true;
     assert.equal((await call('/users', { empName: 'Rollback', userName: 'rollback', empRole: 'Staff' }, cookie)).status, 500);
     assert.equal(employees.some(row => row.userName === 'rollback'), false);
