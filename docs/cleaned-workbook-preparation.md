@@ -28,3 +28,13 @@ The legacy parser is used only to reconstruct differences and produce diagnostic
 - No schema change is required for the currently staged date, status, and payment-method corrections. Keep future SQL outside the automatically applied migrations directory until migration is authorized.
 
 Validation: `node --test tests/cleaned-workbook-review.test.cjs`. Tests cover preservation of settlements, live-edit conflicts, date changes, stable IDs, and non-mutation of input snapshots.
+
+## Verify against a fresh database snapshot
+
+Capture a new read-only snapshot as `outputs/cleaned-review/verification-snapshot.json`, then run `node scripts/verify-prepared-data.cjs outputs/cleaned-review`.
+
+This verifies source/snapshot hashes, checks every field in the nine captured business tables against the documented patches, rejects changes to affected full rows, checks relational links, and reconciles counts, nulls, and exact decimal totals without floating-point arithmetic. Inventory quantities are grouped by category, purity, and unit. Monthly amounts are reported separately because a date correction can move a transaction between months while preserving the grand total.
+
+`verification.json` records all checks and any intervening system changes. On success, `prepared-data-verified.json` preserves newly added unrelated records and contains only the reviewed changes. Earlier evidence files remain untouched. `OFFLINE_COPY_VERIFIED` means the local copy preserves the captured database apart from the listed corrections; it does not mean the workbook is reconciled or a database migration has occurred. This is not an apply command. A later write must re-check live state transactionally.
+
+Run `node --test tests/prepared-data-verification.test.cjs` for precision, equal-total row tampering, new records, concurrent edits, broken links, and prohibited financial changes.
