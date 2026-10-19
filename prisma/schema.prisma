@@ -123,8 +123,6 @@ model Job_Cost {
   serviceType    String @map("service_type")
   jobCostId       String    @id
   universalReferenceId String? @map("universal_reference_id")
-  sourceSheet String? @map("source_sheet")
-  sourceRow Int? @map("source_row")
   itemName        String?   @map("item_name")
   deadline        DateTime? @map("delivery_date")
   goldUsed        Decimal?  @default(0.00)
@@ -165,8 +163,6 @@ model Sales {
   price         Decimal?
   priceConfirmed Boolean @default(true) @map("price_confirmed")
   description String?
-  sourceSheet String? @map("source_sheet")
-  sourceRow Int? @map("source_row")
   status        SalesStatus @default(PAID)
   salesDate     DateTime    @default(now()) @map("date")
   receiptSentAt DateTime?
@@ -193,8 +189,6 @@ model Inventory {
   category    InventoryCategory @default(GOLD)
   /// Purity for GOLD; sourceKarat for SCRAP movements. NULL preserves unknown purity.
   goldKarat   Int? @db.SmallInt @map("gold_karat")
-  sourceSheet String? @map("source_sheet")
-  sourceRow Int? @map("source_row")
   sourceDate String? @map("source_date")
   quantityIn  Decimal   @default(0.00)
   quantityOut Decimal   @default(0.00)
@@ -215,8 +209,6 @@ model Expenses {
   description String?
   expDate     DateTime  @default(now()) @map("date")
   deletedAt   DateTime?
-  sourceSheet String? @map("source_sheet")
-  sourceRow Int? @map("source_row")
 
   @@map("expenses")
 }
@@ -232,9 +224,6 @@ model JobCostItem {
   laborCost Decimal? @map("labor_cost")
   laborCharge Decimal? @map("labor_charge")
   otherCost Decimal? @map("other_cost")
-  sourceSheet String @map("source_sheet")
-  sourceSalesRow Int @map("source_sales_row")
-  sourceCostRow Int? @map("source_cost_row")
   createdAt DateTime @default(now()) @map("created_at")
   job Job_Cost @relation(fields: [jobCostId], references: [jobCostId], onDelete: Cascade)
 
@@ -245,8 +234,6 @@ model JobCostItem {
 model WorkbookImportIssue {
   issueId String @id @map("issue_id")
   sourceHash String @map("source_hash")
-  sourceSheet String @map("source_sheet")
-  sourceRow Int? @map("source_row")
   message String
   details Json?
   createdAt DateTime @default(now()) @map("created_at")
@@ -263,8 +250,6 @@ model SalePayment {
   paymentNumber Int? @map("payment_number")
   method String?
   notes String?
-  sourceSheet String? @map("source_sheet")
-  sourceRow Int? @map("source_row")
 
   sale Sales @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
 
