@@ -196,7 +196,7 @@ async function queueStaffChanges(req, res, next) {
                     return;
                 }
             }
-            if (spec.entity === 'SALE' && current.status === 'PENDING') {
+            if (spec.entity === 'SALE' && current.status === 'PENDING' && !('jobStatus' in proposedData)) {
                 res.status(409).json({ error: 'Update this invoice from its pending job costing.' });
                 return;
             }

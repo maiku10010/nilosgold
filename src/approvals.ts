@@ -146,7 +146,7 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
         const nextPayment = Number(proposedData.payment ?? paidTotal(current.payments));
         if (nextPayment > nextPrice) { res.status(400).json({ error: 'Payment cannot exceed the sale price.' }); return; }
       }
-      if (spec.entity === 'SALE' && current.status === 'PENDING') { res.status(409).json({ error: 'Update this invoice from its pending job costing.' }); return; }
+      if (spec.entity === 'SALE' && current.status === 'PENDING' && !('jobStatus' in proposedData!)) { res.status(409).json({ error: 'Update this invoice from its pending job costing.' }); return; }
       if (spec.entity === 'INQUIRY' && (current.status !== 'PENDING' || current.jobCost)) { res.status(409).json({ error: 'Only pending inquiries without a job costing can be edited.' }); return; }
     }
     const existingRequest = await prisma.approvalRequest.findFirst({ where: { entityType: spec.entity, entityId: spec.id, status: 'PENDING' }, select: { requestId: true } });
