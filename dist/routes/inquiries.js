@@ -36,7 +36,7 @@ router.post('/', async (req, res) => {
                 ...(date ? { inqDate: new Date(`${date}T00:00:00`) } : {}),
                 ...(typeof clientId === 'string' && clientId ? { client: { connect: { clientId } } } : {}),
             },
-            include: { client: true, jobCost: { include: { sales: true } } },
+            include: { client: true, jobCost: { include: { sales: { include: { payments: true, } } } } },
         });
         res.locals.auditRecordId = inquiry.inquiryId;
         res.status(201).json({ ...inquiry, serviceType: (0, serviceRules_1.getInquiryServiceType)(inquiry) });
@@ -50,7 +50,9 @@ router.get('/', async (_req, res) => {
     try {
         const inquiries = await db_1.prisma.inquiries.findMany({
             where: { deletedAt: null },
-            include: { client: true, jobCost: { include: { sales: true } } },
+            include: {
+                client: true, jobCost: { include: { sales: { include: { payments: true } } } },
+            },
             orderBy: { inqDate: 'desc' },
         });
         res.json(inquiries.map(inquiry => ({ ...inquiry, serviceType: (0, serviceRules_1.getInquiryServiceType)(inquiry) })));

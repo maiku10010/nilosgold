@@ -88,7 +88,7 @@ router.put('/:inquiryId', async (req: Request, res: Response) => {
         ...(req.body.isFullyPaid !== undefined ? { isFullyPaid: req.body.isFullyPaid } : {}),
         ...(date ? { inqDate: new Date(`${date}T00:00:00`) } : {}),
       },
-      include: { client: true, jobCost: { include: { sales: true } } },
+      include: { client: true, jobCost: { include: { sales: { include: { payments: true, } } } } },
     });
     res.json({ ...inquiry, serviceType: getInquiryServiceType(inquiry) });
   } catch (error) {
