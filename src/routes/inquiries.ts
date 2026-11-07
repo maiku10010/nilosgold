@@ -33,8 +33,17 @@ router.post('/', async (req: Request, res: Response) => {
         ...(date ? { inqDate: new Date(`${date}T00:00:00`) } : {}),
         ...(typeof clientId === 'string' && clientId ? { client: { connect: { clientId } } } : {}),
       },
-      include: { client: true, jobCost: { include: { sales: true } } },
-    });
+      include: {
+        client: true,
+        jobCost: {
+          include: {
+            sales: {
+              include: { payments: true }
+            }
+          }
+        },
+
+      });
 
     res.locals.auditRecordId = inquiry.inquiryId;
     res.status(201).json({ ...inquiry, serviceType: getInquiryServiceType(inquiry) });
