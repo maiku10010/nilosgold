@@ -4,7 +4,6 @@ const express_1 = require("express");
 const db_1 = require("../db");
 const validation_1 = require("../validation");
 const friendlyId_1 = require("../friendlyId");
-const inventoryLedger_1 = require("../inventoryLedger");
 const router = (0, express_1.Router)();
 //create operation for expenses
 router.post('/', async (req, res) => {
@@ -34,11 +33,13 @@ router.post('/', async (req, res) => {
 //read operation for expenses
 router.get('/', async (req, res) => {
     try {
-        const [allExpenses, purchases] = await Promise.all([
+        const [allExpenses, purchases, archivedPurchases] = await Promise.all([
             db_1.prisma.expenses.findMany({ where: { deletedAt: null }, orderBy: { expDate: 'desc' } }),
             db_1.prisma.inventory.findMany({ where: { deletedAt: null, quantityIn: { gt: 0 }, unitPrice: { not: null } }, orderBy: { updatedAt: 'desc' } }),
+            db_1.prisma.expenses.findMany({ where: { expenseId: { startsWith: 'inventory-' }, deletedAt: { not: null } }, select: { expenseId: true } }),
         ]);
-        const inventoryExpenses = purchases.map(row => ({
+        const archivedIds = new Set(archivedPurchases.map(row => row.expenseId));
+        const inventoryExpenses = purchases.filter(row => !archivedIds.has(`inventory-${row.referenceId}`)).map(row => ({
             expenseId: `inventory-${row.referenceId}`, category: `Inventory · ${row.category}`,
             amount: Number(row.quantityIn) * Number(row.unitPrice),
             description: `Purchase: ${row.itemName} (${row.quantityIn} ${row.unit}) at ${Number(row.unitPrice).toFixed(2)} per ${row.unit}`,
@@ -92,10 +93,19 @@ router.delete('/:expenseId', async (req, res) => {
         if (targetId.startsWith('inventory-')) {
             const referenceId = targetId.slice('inventory-'.length);
             const deleted = await db_1.prisma.$transaction(async (tx) => {
-                const result = await tx.inventory.updateMany({ where: { referenceId, deletedAt: null }, data: { deletedAt: new Date() } });
-                if (result.count)
-                    await (0, inventoryLedger_1.validateInventoryLedger)(tx);
-                return result.count;
+                const row = await tx.inventory.findFirst({ where: { referenceId, deletedAt: null, quantityIn: { gt: 0 }, unitPrice: { not: null } } });
+                if (!row)
+                    return false;
+                // Retain an archived expense snapshot without changing the stock ledger.
+                await tx.expenses.upsert({
+                    where: { expenseId: targetId },
+                    create: { expenseId: targetId, category: `Inventory · ${row.category}`,
+                        amount: row.quantityIn.mul(row.unitPrice),
+                        description: `Purchase: ${row.itemName} (${row.quantityIn} ${row.unit}) at ${Number(row.unitPrice).toFixed(2)} per ${row.unit}`,
+                        expDate: row.updatedAt, deletedAt: new Date() },
+                    update: { deletedAt: new Date() },
+                });
+                return true;
             });
             if (!deleted)
                 return res.status(404).json({ error: 'Inventory purchase not found or already archived.' });
