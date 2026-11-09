@@ -27,6 +27,10 @@ function goldMaterialCost(used, scrap, rate) {
     return new client_1.Prisma.Decimal(used).plus(scrap).times(rate).toDecimalPlaces(2);
 }
 async function syncGoldAllocation(tx, input) {
+    if (input.serviceType && input.serviceType !== 'Custom' && (input.goldSourceId == null || input.goldSourceId === '')) {
+        await releaseGoldAllocation(tx, input.jobCostId);
+        return null;
+    }
     if (typeof input.goldSourceId !== 'string' || !input.goldSourceId) {
         throw Object.assign(new Error('Choose a gold source.'), { statusCode: 400, field: 'goldSourceId' });
     }

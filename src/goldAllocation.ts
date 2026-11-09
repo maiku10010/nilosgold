@@ -18,9 +18,13 @@ export function goldMaterialCost(used: Prisma.Decimal | string | number, scrap: 
 }
 
 export async function syncGoldAllocation(tx: Prisma.TransactionClient, input: {
-  goldSourceId: unknown; goldUsed: Prisma.Decimal; goldScrap: Prisma.Decimal;
+  serviceType?: string; goldSourceId: unknown; goldUsed: Prisma.Decimal; goldScrap: Prisma.Decimal;
   goldCostPerG: number; jobCostId: string; universalReferenceId: string | null;
 }) {
+  if (input.serviceType && input.serviceType !== 'Custom' && (input.goldSourceId == null || input.goldSourceId === '')) {
+    await releaseGoldAllocation(tx, input.jobCostId);
+    return null;
+  }
   if (typeof input.goldSourceId !== 'string' || !input.goldSourceId) {
     throw Object.assign(new Error('Choose a gold source.'), { statusCode: 400, field: 'goldSourceId' });
   }

@@ -1,4 +1,4 @@
-import { parseStoneCost } from '../lib/jobCostingSchema';
+import { calculateLaborCost, parseStoneCost } from '../lib/jobCostingSchema';
 import { stripDisallowedFields, validateServiceFields, getInquiryServiceType, ServiceType } from '../lib/serviceRules';
 import { roundTwo } from '../rounding';
 import { Request, Response, Router } from 'express';
@@ -44,12 +44,12 @@ router.post('/', async (req: Request, res: Response) => {
       const goldScrap = goldWeight(payload.goldScrap ?? 0);
       const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);
       const stoneCost = parseStoneCost(payload.stoneCost);
-      const laborCost = roundTwo(payload.laborCost);
+      const laborCost = calculateLaborCost(inquiry.quotedPrice);
       const laborCharge = roundTwo(payload.laborCharge ?? 0);
       const otherCost = roundTwo(payload.otherCost ?? 0);
       const sellingPrice = roundTwo(payload.sellingPrice);
 
-      if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || (rules.gold && !isPositiveNumber(goldCostPerG)) || !isPositiveNumber(sellingPrice)) {
+      if (![stoneCost ?? 0, laborCost, laborCharge, otherCost, goldCostPerG].every(isNonNegativeNumber) || (rules.gold && (serviceType === 'Custom' || !!payload.goldSourceId) && !isPositiveNumber(goldCostPerG)) || !isPositiveNumber(sellingPrice)) {
         throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
       }
       // A soft-deleted costing must release the inquiry's unique one-to-one link
@@ -105,7 +105,7 @@ router.post('/', async (req: Request, res: Response) => {
           inquiry: { connect: { inquiryId } },
         },
       });
-      if (rules.gold) await syncGoldAllocation(tx, { goldSourceId: payload.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId: createdJob.jobCostId, universalReferenceId: createdJob.universalReferenceId });
+      if (rules.gold) await syncGoldAllocation(tx, { serviceType, goldSourceId: payload.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId: createdJob.jobCostId, universalReferenceId: createdJob.universalReferenceId });
       await validateInventoryLedger(tx);
       const sale = await tx.sales.create({
         data: {
@@ -204,7 +204,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
     }
 
     const updated = await prisma.$transaction(async (tx) => {
-      const existing = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { sales: { include: { client: true } } } });
+      const existing = await tx.job_Cost.findFirst({ where: { jobCostId, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } } } });
       if (!existing) throw Object.assign(new Error('Job costing record not found.'), { statusCode: 404 });
       if (!existing.sales) throw Object.assign(new Error('This costing has no linked invoice.'), { statusCode: 409 });
       const payload = stripDisallowedFields(existing.serviceType as ServiceType, req.body);
@@ -213,7 +213,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       const goldScrap = goldWeight(payload.goldScrap ?? 0);
       const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);
       const stoneCost = parseStoneCost(payload.stoneCost);
-      const laborCost = roundTwo(payload.laborCost);
+      const laborCost = calculateLaborCost(existing.inquiry?.quotedPrice ?? existing.sales.price);
       const laborCharge = roundTwo(payload.laborCharge ?? 0);
       const otherCost = roundTwo(payload.otherCost ?? 0);
       const sellingPrice = roundTwo(payload.sellingPrice);
@@ -221,9 +221,9 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
         throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
       }
 
-      if (rules.gold && !isPositiveNumber(goldCostPerG)) throw Object.assign(new Error('Enter a gold price greater than zero.'), { statusCode: 400 });
+      if (rules.gold && (existing.serviceType === 'Custom' || !!payload.goldSourceId) && !isPositiveNumber(goldCostPerG)) throw Object.assign(new Error('Enter a gold price greater than zero.'), { statusCode: 400 });
       if (!rules.gold) await releaseGoldAllocation(tx, jobCostId);
-      if (rules.gold) await syncGoldAllocation(tx, { goldSourceId: payload.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId, universalReferenceId: existing.universalReferenceId });
+      if (rules.gold) await syncGoldAllocation(tx, { serviceType: existing.serviceType, goldSourceId: payload.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId, universalReferenceId: existing.universalReferenceId });
       await validateInventoryLedger(tx);
       const namesMatch = existing.sales.client.clientName.trim().toLocaleLowerCase() === req.body.clientName.trim().toLocaleLowerCase();
       if (existing.sales.invoiceId !== req.body.invoiceId || !namesMatch) {

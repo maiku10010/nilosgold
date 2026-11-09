@@ -1,4 +1,4 @@
-import { parseStoneCost } from './lib/jobCostingSchema';
+import { calculateLaborCost, parseStoneCost } from './lib/jobCostingSchema';
 import { serviceRules, validateServiceFields, stripDisallowedFields, ServiceType } from './lib/serviceRules';
 import { roundTwo } from './rounding';
 import { NextFunction, Request, Response, Router } from 'express';
@@ -190,7 +190,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       return;
     }
     case 'JOB_COST': {
-      const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { sales: true } });
+      const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { sales: true, inquiry: true } });
       if (!job) throw new Error('Job costing is no longer active.');
       const payload = goldRestoreSnapshot ? changes : stripDisallowedFields(job.serviceType as ServiceType, changes);
       const rules = goldRestoreSnapshot ? serviceRules(job.serviceType) : validateServiceFields(job.serviceType, changes);
@@ -200,7 +200,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
         ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap === null ? null : goldWeight(jobFields.goldScrap) } : {}),
         ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: jobFields.goldCostPerG === null ? null : Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
         ...(jobFields.stoneCost !== undefined ? { stoneCost: parseStoneCost(jobFields.stoneCost) } : {}),
-        ...(jobFields.laborCost !== undefined ? { laborCost: jobFields.laborCost as number | null } : {}),
+        laborCost: goldRestoreSnapshot ? jobFields.laborCost as number | null : calculateLaborCost(job.inquiry?.quotedPrice ?? job.sales?.price),
         ...(jobFields.laborCharge !== undefined ? { laborCharge: jobFields.laborCharge as number | null } : {}),
         ...(jobFields.otherCost !== undefined ? { otherCost: jobFields.otherCost as number } : {}),
         ...(jobFields.itemName !== undefined ? { itemName: jobFields.itemName as string | null } : {}),
@@ -222,9 +222,10 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       } else if (!rules.gold) {
         await releaseGoldAllocation(tx, id);
       } else {
-        const source = jobFields.goldSourceId ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
+        const source = jobFields.goldSourceId || job.goldKarat == null ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
         await syncGoldAllocation(tx, {
-          goldSourceId: jobFields.goldSourceId ?? source?.referenceId,
+          serviceType: job.serviceType,
+          goldSourceId: jobFields.goldSourceId === undefined ? source?.referenceId : jobFields.goldSourceId,
           goldUsed: goldWeight(jobFields.goldUsed ?? job.goldUsed), goldScrap: goldWeight(jobFields.goldScrap ?? job.goldScrap),
           goldCostPerG: Number(jobFields.goldCostPerG ?? job.goldCostPerG), jobCostId: id, universalReferenceId: job.universalReferenceId,
         });

@@ -253,7 +253,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
             return;
         }
         case 'JOB_COST': {
-            const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { sales: true } });
+            const job = await tx.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { sales: true, inquiry: true } });
             if (!job)
                 throw new Error('Job costing is no longer active.');
             const payload = goldRestoreSnapshot ? changes : (0, serviceRules_1.stripDisallowedFields)(job.serviceType, changes);
@@ -264,7 +264,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                     ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap === null ? null : (0, goldAllocation_1.goldWeight)(jobFields.goldScrap) } : {}),
                     ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: jobFields.goldCostPerG === null ? null : Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
                     ...(jobFields.stoneCost !== undefined ? { stoneCost: (0, jobCostingSchema_1.parseStoneCost)(jobFields.stoneCost) } : {}),
-                    ...(jobFields.laborCost !== undefined ? { laborCost: jobFields.laborCost } : {}),
+                    laborCost: goldRestoreSnapshot ? jobFields.laborCost : (0, jobCostingSchema_1.calculateLaborCost)(job.inquiry?.quotedPrice ?? job.sales?.price),
                     ...(jobFields.laborCharge !== undefined ? { laborCharge: jobFields.laborCharge } : {}),
                     ...(jobFields.otherCost !== undefined ? { otherCost: jobFields.otherCost } : {}),
                     ...(jobFields.itemName !== undefined ? { itemName: jobFields.itemName } : {}),
@@ -289,9 +289,10 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                 await (0, goldAllocation_1.releaseGoldAllocation)(tx, id);
             }
             else {
-                const source = jobFields.goldSourceId ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
+                const source = jobFields.goldSourceId || job.goldKarat == null ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
                 await (0, goldAllocation_1.syncGoldAllocation)(tx, {
-                    goldSourceId: jobFields.goldSourceId ?? source?.referenceId,
+                    serviceType: job.serviceType,
+                    goldSourceId: jobFields.goldSourceId === undefined ? source?.referenceId : jobFields.goldSourceId,
                     goldUsed: (0, goldAllocation_1.goldWeight)(jobFields.goldUsed ?? job.goldUsed), goldScrap: (0, goldAllocation_1.goldWeight)(jobFields.goldScrap ?? job.goldScrap),
                     goldCostPerG: Number(jobFields.goldCostPerG ?? job.goldCostPerG), jobCostId: id, universalReferenceId: job.universalReferenceId,
                 });

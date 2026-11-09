@@ -141,7 +141,7 @@ test('the costing create route deducts the required gold source and persists its
   Object.assign(prisma, tx);
   prisma.$transaction = async (fn, options) => { assert.equal(options.isolationLevel, 'Serializable'); return fn(prisma); };
   prisma.inquiries = {
-    findFirst: async () => ({ inquiryId: 'INQ-1', category: 'Repair', customerName: 'Mia', status: 'PENDING', jobCost: null, client: { clientId: 'CLIENT-1' }, universalReferenceId: 'REF-1' }),
+    findFirst: async () => ({ inquiryId: 'INQ-1', category: 'Repair', customerName: 'Mia', quotedPrice: 15000, status: 'PENDING', jobCost: null, client: { clientId: 'CLIENT-1' }, universalReferenceId: 'REF-1' }),
     update: async () => ({}),
   };
   prisma.employee = { findFirst: async () => ({ empId: 'EMP-1' }) };
@@ -223,7 +223,7 @@ test('costing API rejects disabled fields with 400 and permits labor-only Cleani
   Object.assign(prisma, tx);
   let transactions = 0;
   prisma.$transaction = async fn => { transactions++; return fn(prisma); };
-  prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', category: 'Cleaning', customerName: 'Mia', status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
+  prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', category: 'Cleaning', customerName: 'Mia', quotedPrice: 15000, status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
   prisma.employee = { findFirst: async () => ({ empId: 'E' }) };
   prisma.job_Cost.create = async ({ data }) => Object.assign(tx.job, data);
   prisma.job_Cost.findUniqueOrThrow = async () => tx.job;
@@ -305,7 +305,7 @@ test('direct Resize edits store stone cost as null and preserve measured-zero la
   await edit({ params: { jobCostId: 'JOB-1' }, body: { invoiceId: 'INV-1', clientName: 'Mia', goldSourceId: '18K-IN', goldUsed: '1', goldScrap: '0', goldCostPerG: 8000, stoneCost: null, laborCost: 0, sellingPrice: 15000 } }, result);
   assert.equal(result.statusCode, 200);
   assert.equal(result.body.stoneCost, null);
-  assert.equal(result.body.laborCost, 0);
+  assert.equal(result.body.laborCost, 4500);
   assert.equal(result.body.goldScrap.toString(), '0');
 });
 
@@ -338,7 +338,7 @@ test('Cleaning staff edits retain nulls through approval and undo and reject for
   const approved = response();
   await approve({ params: { requestId: 'APP-NULL' }, body: {}, user }, approved);
   assert.equal(approved.statusCode, 200);
-  assert.equal(tx.job.laborCost, 1200);
+  assert.equal(tx.job.laborCost, 4500);
   for (const key of ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost']) assert.equal(tx.job[key], null);
   const restored = response();
   await undo({ params: { requestId: 'APP-NULL' }, user }, restored);
@@ -355,7 +355,7 @@ test('Repair and Custom creates preserve omitted/null stone costs and explicitly
     for (const stoneCost of [undefined, null, 0, 500]) {
       const tx = database([source()]); Object.assign(prisma, tx);
       prisma.$transaction = async fn => fn(prisma);
-      prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', category: type, customerName: 'Mia', status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
+      prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', category: type, customerName: 'Mia', quotedPrice: 15000, status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
       prisma.employee = { findFirst: async () => ({ empId: 'E' }) };
       prisma.job_Cost.create = async ({ data }) => Object.assign(tx.job, data);
       prisma.job_Cost.findUniqueOrThrow = async () => tx.job;
@@ -427,7 +427,7 @@ test('costing inherits the original inquiry service type and audits only an actu
     const tx = database([source()]); Object.assign(prisma, tx);
     const logs = []; let inTransaction = false;
     prisma.$transaction = async (fn, options) => { assert.equal(options.isolationLevel, 'Serializable'); inTransaction = true; try { return await fn(prisma); } finally { inTransaction = false; } };
-    prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', category: original, customerName: 'Mia', status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
+    prisma.inquiries = { findFirst: async () => ({ inquiryId: 'INQ-1', category: original, customerName: 'Mia', quotedPrice: 15000, status: 'PENDING', client: { clientId: 'C' } }), update: async () => ({}) };
     prisma.employee = { findFirst: async () => ({ empId: 'E' }) };
     prisma.job_Cost.create = async ({ data }) => Object.assign(tx.job, data);
     prisma.job_Cost.findUniqueOrThrow = async () => tx.job;
