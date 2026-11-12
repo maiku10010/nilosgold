@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const goldAllocation_1 = require("../goldAllocation");
+const auth_1 = require("../auth");
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const db_1 = require("../db");
@@ -86,6 +87,33 @@ router.get('/', async (req, res) => {
     catch (error) {
         console.error('Error fetching inventory items:', error);
         res.status(500).json({ error: 'Inventory could not be loaded.' });
+    }
+});
+// Rename an entire stock group without changing quantities, prices or movement dates.
+router.patch('/:referenceId/details', auth_1.requireAdmin, async (req, res) => {
+    const itemName = typeof req.body.itemName === 'string' ? req.body.itemName.trim() : '';
+    if (!itemName || itemName.length > 120)
+        return res.status(400).json({ error: 'Enter an item description with 120 characters or fewer.' });
+    if (Object.keys(req.body).some(key => key !== 'itemName'))
+        return res.status(400).json({ error: 'Only the item description can be changed here.' });
+    try {
+        const referenceId = String(req.params.referenceId);
+        await db_1.prisma.$transaction(async (tx) => {
+            const existing = await tx.inventory.findFirst({ where: { referenceId, deletedAt: null } });
+            if (!existing)
+                throw Object.assign(new Error('Inventory item was not found.'), { statusCode: 404 });
+            const rows = await tx.inventory.findMany({ where: { deletedAt: null, category: existing.category } });
+            const matches = (row) => existing.category === 'GOLD' ? row.goldKarat === existing.goldKarat
+                : existing.category === 'SCRAP' || (row.unit === existing.unit && row.itemName.trim().toLowerCase() === existing.itemName.trim().toLowerCase());
+            if (!['GOLD', 'SCRAP'].includes(existing.category) && rows.some(row => !matches(row) && row.unit === existing.unit && row.itemName.trim().toLowerCase() === itemName.toLowerCase()))
+                throw Object.assign(new Error('Another item already has that description. Choose a different description.'), { statusCode: 409 });
+            await tx.inventory.updateMany({ where: { referenceId: { in: rows.filter(matches).map(row => row.referenceId) } }, data: { itemName } });
+        }, { isolationLevel: client_1.Prisma.TransactionIsolationLevel.Serializable });
+        res.json({ referenceId, message: 'Item description updated. Stock quantities are unchanged.' });
+    }
+    catch (error) {
+        console.error('Item details could not be updated:', error);
+        res.status(Number(error.statusCode) || 500).json({ error: error instanceof Error ? error.message : 'Item details could not be updated.' });
     }
 });
 router.put('/:referenceId', async (req, res) => {

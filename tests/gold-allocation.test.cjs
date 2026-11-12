@@ -76,6 +76,23 @@ const approve = approvals.default.stack.find(layer => layer.route?.path === '/:r
 const undo = approvals.default.stack.find(layer => layer.route?.path === '/:requestId/undo').route.stack[0].handle;
 const response = () => ({ statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } });
 
+test('staff can edit customer-gold and no-source jobs without a gold price', async () => {
+  for (const goldSourceId of ['CUSTOMER_GOLD', '']) {
+    const tx = database([]);
+    Object.assign(prisma, tx);
+    let queued;
+    prisma.approvalRequest = { findFirst: async () => null, create: async ({ data }) => (queued = { ...data, requestId: 'OPTIONAL-GOLD' }) };
+    const result = response();
+    await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: { empId: 'STAFF', empRole: 'Staff' }, body: { goldSourceId, goldCostPerG: 0 } }, result, () => assert.fail('must queue'));
+    assert.equal(result.statusCode, 202);
+    assert.equal(queued.proposedData.goldCostPerG, 0);
+  }
+  const tx = database([source()]); Object.assign(prisma, tx);
+  const rejected = response();
+  await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: { empId: 'STAFF', empRole: 'Staff' }, body: { goldSourceId: '18K-IN', goldCostPerG: 0 } }, rejected, () => assert.fail('must validate'));
+  assert.equal(rejected.statusCode, 400);
+});
+
 test('staff requests retain milligram precision and approval applies the chosen source once', async () => {
   const tx = database([source()]);
   Object.assign(prisma, tx);

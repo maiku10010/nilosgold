@@ -62,8 +62,8 @@ async function findCurrent(entity: Entity, id: string): Promise<any> {
 }
 
 const numericFields = new Set(['price', 'payment', 'goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost', 'laborCost', 'laborCharge', 'otherCost', 'sellingPrice', 'quotedPrice', 'amount', 'goldIn', 'goldOut', 'scraps', 'quantityIn', 'quantityOut', 'quantityLoss', 'unitPrice']);
-const positiveFields = new Set(['price', 'goldCostPerG', 'sellingPrice', 'amount', 'unitPrice']);
-const nullableStringFields = new Set(['contactInfo', 'email', 'details', 'description', 'contactNum']);
+const positiveFields = new Set(['price', 'sellingPrice', 'amount', 'unitPrice']);
+const nullableStringFields = new Set(['contactInfo', 'email', 'details', 'description', 'contactNum', 'goldSourceId']);
 function normalizedChanges(body: Record<string, unknown>, spec: Spec, serviceType?: ServiceType): Record<string, unknown> {
   const changes: Record<string, unknown> = {};
   const notApplicable = serviceType ? stripDisallowedFields(serviceType, {}) : {};
@@ -85,6 +85,8 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec, serviceTyp
       changes[key] = raw;
     } else if (numericFields.has(key)) {
       const value = spec.entity === 'JOB_COST' ? roundTwo(raw) : Number(raw);
+      const requiresGoldPrice = key === 'goldCostPerG' && !!body.goldSourceId && body.goldSourceId !== 'CUSTOMER_GOLD';
+      if (requiresGoldPrice && value <= 0) throw new Error('Enter a gold price per gram greater than zero for shop gold.');
       if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0)) throw new Error(`Enter a valid ${fieldLabel(key)}.`);
       changes[key] = value;
     } else if (key === 'isFullyPaid' && typeof raw === 'boolean') {
@@ -133,7 +135,7 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
         const type = spec.entity === 'JOB_COST' ? current.serviceType as ServiceType : undefined;
         const payload = type ? stripDisallowedFields(type, req.body ?? {}) : req.body ?? {};
         if (spec.entity === 'JOB_COST') validateServiceFields(type, req.body ?? {});
-        proposedData = normalizedChanges(payload, spec, type);
+        proposedData = normalizedChanges(type ? { ...payload, goldSourceId: payload.goldSourceId === undefined ? current.goldSourceId : payload.goldSourceId } : payload, spec, type);
       }
       catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
       if (spec.entity === 'INVENTORY') {
