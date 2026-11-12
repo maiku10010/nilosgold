@@ -526,3 +526,22 @@ test('scrap API exposes job reference, source karat, signed grams and one pooled
   assert.equal(result.body[1].sourceKarat, 14);
   assert.equal(result.body[1].balance, .3);
 });
+
+
+test('customer gold works without stock and switching sources restores shop stock', async () => {
+  const tx = database([]);
+  await syncGoldAllocation(tx, allocation({ goldSourceId: 'CUSTOMER_GOLD', goldCostPerG: 0 }));
+  assert.equal(tx.job.customerGold, true);
+  assert.equal(tx.job.goldKarat, null);
+  assert.equal(tx.rows.length, 0);
+  tx.rows.push(source());
+  await syncGoldAllocation(tx, allocation());
+  assert.equal(tx.job.customerGold, false);
+  assert.equal(tx.job.goldKarat, 18);
+  assert.equal(scrapNet(tx), '0.2');
+  await syncGoldAllocation(tx, allocation({ goldSourceId: 'CUSTOMER_GOLD' }));
+  assert.equal(tx.job.customerGold, true);
+  assert.equal(tx.job.goldKarat, null);
+  assert.equal(scrapNet(tx), '0');
+  assert.ok(tx.rows.filter(row => row.category === 'GOLD' && row.jobCostId === 'JOB-1').every(row => row.deletedAt));
+});

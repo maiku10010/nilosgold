@@ -128,6 +128,7 @@ model Job_Cost {
   deadline        DateTime? @map("delivery_date")
   goldUsed        Decimal?  @default(0.00)
   /// Whole-number karat, 10 through 24; enforced by the SQL migration.
+  customerGold    Boolean @default(false) @map("customer_gold")
   goldKarat       Int? @db.SmallInt @map("gold_karat")
   goldScrap       Decimal?  @default(0.00) @map("gold_scrap")
   stoneCost       Decimal?  @default(0.00)

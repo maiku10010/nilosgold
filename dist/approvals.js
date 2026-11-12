@@ -47,7 +47,7 @@ async function findCurrent(entity, id) {
             if (!job)
                 return null;
             const source = await db_1.prisma.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
-            return { ...job, goldSourceId: source?.referenceId ?? null };
+            return { ...job, goldSourceId: job.customerGold ? 'CUSTOMER_GOLD' : source?.referenceId ?? null };
         }
         case 'INQUIRY': return db_1.prisma.inquiries.findFirst({ where: { inquiryId: id, deletedAt: null }, include: { jobCost: true } });
         case 'EXPENSE': return db_1.prisma.expenses.findFirst({ where: { expenseId: id, deletedAt: null } });
@@ -283,7 +283,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                         } });
                 }
                 await (0, goldAllocation_1.restoreScrapRecovery)(tx, id, goldRestoreSnapshot.inventoryMovement);
-                await tx.job_Cost.update({ where: { jobCostId: id }, data: { goldKarat: goldRestoreSnapshot.goldKarat ?? null } });
+                await tx.job_Cost.update({ where: { jobCostId: id }, data: { goldKarat: goldRestoreSnapshot.goldKarat ?? null, customerGold: goldRestoreSnapshot.customerGold ?? false } });
             }
             else if (!rules.gold) {
                 await (0, goldAllocation_1.releaseGoldAllocation)(tx, id);
@@ -292,7 +292,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                 const source = jobFields.goldSourceId || job.goldKarat == null ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
                 await (0, goldAllocation_1.syncGoldAllocation)(tx, {
                     serviceType: job.serviceType,
-                    goldSourceId: jobFields.goldSourceId === undefined ? source?.referenceId : jobFields.goldSourceId,
+                    goldSourceId: jobFields.goldSourceId === undefined ? (job.customerGold ? 'CUSTOMER_GOLD' : source?.referenceId) : jobFields.goldSourceId,
                     goldUsed: (0, goldAllocation_1.goldWeight)(jobFields.goldUsed ?? job.goldUsed), goldScrap: (0, goldAllocation_1.goldWeight)(jobFields.goldScrap ?? job.goldScrap),
                     goldCostPerG: Number(jobFields.goldCostPerG ?? job.goldCostPerG), jobCostId: id, universalReferenceId: job.universalReferenceId,
                 });

@@ -49,7 +49,7 @@ router.post('/', async (req: Request, res: Response) => {
       const otherCost = roundTwo(payload.otherCost ?? 0);
       const sellingPrice = roundTwo(payload.sellingPrice);
 
-      if (![stoneCost ?? 0, laborCost, laborCharge, otherCost, goldCostPerG].every(isNonNegativeNumber) || (rules.gold && (serviceType === 'Custom' || !!payload.goldSourceId) && !isPositiveNumber(goldCostPerG)) || !isPositiveNumber(sellingPrice)) {
+      if (![stoneCost ?? 0, laborCost, laborCharge, otherCost, goldCostPerG].every(isNonNegativeNumber) || (rules.gold && payload.goldSourceId !== 'CUSTOMER_GOLD' && (serviceType === 'Custom' || !!payload.goldSourceId) && !isPositiveNumber(goldCostPerG)) || !isPositiveNumber(sellingPrice)) {
         throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
       }
       // A soft-deleted costing must release the inquiry's unique one-to-one link
@@ -221,7 +221,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
         throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
       }
 
-      if (rules.gold && (existing.serviceType === 'Custom' || !!payload.goldSourceId) && !isPositiveNumber(goldCostPerG)) throw Object.assign(new Error('Enter a gold price greater than zero.'), { statusCode: 400 });
+      if (rules.gold && payload.goldSourceId !== 'CUSTOMER_GOLD' && (existing.serviceType === 'Custom' || !!payload.goldSourceId) && !isPositiveNumber(goldCostPerG)) throw Object.assign(new Error('Enter a gold price greater than zero.'), { statusCode: 400 });
       if (!rules.gold) await releaseGoldAllocation(tx, jobCostId);
       if (rules.gold) await syncGoldAllocation(tx, { serviceType: existing.serviceType, goldSourceId: payload.goldSourceId, goldUsed, goldScrap, goldCostPerG, jobCostId, universalReferenceId: existing.universalReferenceId });
       await validateInventoryLedger(tx);

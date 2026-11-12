@@ -54,7 +54,7 @@ router.post('/', async (req, res) => {
             const laborCharge = (0, rounding_1.roundTwo)(payload.laborCharge ?? 0);
             const otherCost = (0, rounding_1.roundTwo)(payload.otherCost ?? 0);
             const sellingPrice = (0, rounding_1.roundTwo)(payload.sellingPrice);
-            if (![stoneCost ?? 0, laborCost, laborCharge, otherCost, goldCostPerG].every(validation_1.isNonNegativeNumber) || (rules.gold && (serviceType === 'Custom' || !!payload.goldSourceId) && !(0, validation_1.isPositiveNumber)(goldCostPerG)) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
+            if (![stoneCost ?? 0, laborCost, laborCharge, otherCost, goldCostPerG].every(validation_1.isNonNegativeNumber) || (rules.gold && payload.goldSourceId !== 'CUSTOMER_GOLD' && (serviceType === 'Custom' || !!payload.goldSourceId) && !(0, validation_1.isPositiveNumber)(goldCostPerG)) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
                 throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
             }
             // A soft-deleted costing must release the inquiry's unique one-to-one link
@@ -238,7 +238,7 @@ router.put('/:jobCostId', async (req, res) => {
             if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(validation_1.isNonNegativeNumber) || !(0, validation_1.isNonNegativeNumber)(goldCostPerG) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
                 throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
             }
-            if (rules.gold && (existing.serviceType === 'Custom' || !!payload.goldSourceId) && !(0, validation_1.isPositiveNumber)(goldCostPerG))
+            if (rules.gold && payload.goldSourceId !== 'CUSTOMER_GOLD' && (existing.serviceType === 'Custom' || !!payload.goldSourceId) && !(0, validation_1.isPositiveNumber)(goldCostPerG))
                 throw Object.assign(new Error('Enter a gold price greater than zero.'), { statusCode: 400 });
             if (!rules.gold)
                 await (0, goldAllocation_1.releaseGoldAllocation)(tx, jobCostId);

@@ -27,6 +27,11 @@ function goldMaterialCost(used, scrap, rate) {
     return new client_1.Prisma.Decimal(used).plus(scrap).times(rate).toDecimalPlaces(2);
 }
 async function syncGoldAllocation(tx, input) {
+    if (input.goldSourceId === 'CUSTOMER_GOLD') {
+        await releaseGoldAllocation(tx, input.jobCostId);
+        await tx.job_Cost.update({ where: { jobCostId: input.jobCostId }, data: { customerGold: true } });
+        return null;
+    }
     if (input.serviceType && input.serviceType !== 'Custom' && (input.goldSourceId == null || input.goldSourceId === '')) {
         await releaseGoldAllocation(tx, input.jobCostId);
         return null;
@@ -62,7 +67,7 @@ async function syncGoldAllocation(tx, input) {
             } });
     // Recovered scrap is a separate stock pool, never usable gold stock.
     await syncScrapRecovery(tx, input.jobCostId, source.goldKarat, input.goldScrap);
-    await tx.job_Cost.update({ where: { jobCostId: input.jobCostId }, data: { goldKarat: source.goldKarat } });
+    await tx.job_Cost.update({ where: { jobCostId: input.jobCostId }, data: { goldKarat: source.goldKarat, customerGold: false } });
     return source.goldKarat;
 }
 function scrapBalances(rows) {
@@ -105,5 +110,5 @@ async function reverseJobInventory(tx, jobCostId) {
 async function releaseGoldAllocation(tx, jobCostId) {
     await syncScrapRecovery(tx, jobCostId, null, new client_1.Prisma.Decimal(0));
     await tx.inventory.updateMany({ where: { jobCostId, category: 'GOLD' }, data: { deletedAt: new Date() } });
-    await tx.job_Cost.update({ where: { jobCostId }, data: { goldKarat: null } });
+    await tx.job_Cost.update({ where: { jobCostId }, data: { goldKarat: null, customerGold: false } });
 }

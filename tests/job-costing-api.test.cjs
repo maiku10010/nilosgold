@@ -173,3 +173,15 @@ test('Custom still requires a source and does not accept omitted source', async 
   assert.equal(result.status, 400);
   assert.equal(result.data.field, 'goldSourceId');
 });
+
+test('customer gold saves with zero cost and no shop stock, and survives editing', async () => {
+  fixture.inventory.length = 0;
+  const result = await request('POST', '', body({ goldSourceId: 'CUSTOMER_GOLD', goldUsed: '10', goldScrap: '1', goldCostPerG: 0 }));
+  assert.equal(result.status, 201);
+  assert.equal(result.data.customerGold, true);
+  assert.equal(fixture.inventory.length, 0);
+  const edited = await request('PUT', '/' + result.data.jobCostId, body({ invoiceId: result.data.sales.invoiceId, goldSourceId: 'CUSTOMER_GOLD', goldUsed: '11', goldCostPerG: 0 }));
+  assert.equal(edited.status, 200);
+  assert.equal(fixture.jobs[0].customerGold, true);
+  assert.equal(fixture.inventory.length, 0);
+});
