@@ -35,7 +35,7 @@ function parseMovement(body, existing) {
     if (![quantityIn, quantityOut, quantityLoss].every(validation_1.isNonNegativeNumber) || Number(quantityIn) + Number(quantityOut) + Number(quantityLoss) <= 0)
         return 'Enter a positive quantity for at least one movement.';
     if (unitPrice !== null && !(0, validation_1.isPositiveNumber)(unitPrice))
-        return 'Unit price must be greater than zero, or null when unknown.';
+        return 'Unit price must be greater than zero, or leave it blank if unknown.';
     if (category === 'GOLD' && goldKarat === null && !existing)
         return 'Choose a gold karat from 10K to 24K.';
     if (['GOLD', 'SCRAP'].includes(category) && goldKarat !== null && (!Number.isInteger(goldKarat) || goldKarat < 10 || goldKarat > 24))

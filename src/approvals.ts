@@ -1,3 +1,4 @@
+import { fieldLabel } from "./lib/readableError";
 import { calculateLaborCost, parseStoneCost } from './lib/jobCostingSchema';
 import { serviceRules, validateServiceFields, stripDisallowedFields, ServiceType } from './lib/serviceRules';
 import { roundTwo } from './rounding';
@@ -84,7 +85,7 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec, serviceTyp
       changes[key] = raw;
     } else if (numericFields.has(key)) {
       const value = spec.entity === 'JOB_COST' ? roundTwo(raw) : Number(raw);
-      if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0)) throw new Error(`Enter a valid ${key}.`);
+      if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0)) throw new Error(`Enter a valid ${fieldLabel(key)}.`);
       changes[key] = value;
     } else if (key === 'isFullyPaid' && typeof raw === 'boolean') {
       changes[key] = raw;
@@ -102,13 +103,13 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec, serviceTyp
       changes.quantityLoss = value;
     } else if (typeof raw === 'string') {
       const value = raw.trim();
-      if (!value && !nullableStringFields.has(key)) throw new Error(`${key} cannot be empty.`);
-      if (value.length > 500) throw new Error(`${key} is too long.`);
+      if (!value && !nullableStringFields.has(key)) throw new Error(`${fieldLabel(key)} cannot be empty.`);
+      if (value.length > 500) throw new Error(`${fieldLabel(key)} is too long.`);
       if (key === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw new Error('Enter a valid email address.');
       if (['contactNum', 'contactInfo'].includes(key) && value && !isValidPHContact(raw)) throw new Error('Enter an 11-digit Philippine mobile number starting with 09.');
       changes[key] = value || (nullableStringFields.has(key) ? null : value);
     } else {
-      throw new Error(`Invalid value for ${key}.`);
+      throw new Error(`Invalid value for ${fieldLabel(key)}.`);
     }
   }
   if (Object.keys(changes).length === 0) throw new Error('There are no editable fields in this change request.');
@@ -255,7 +256,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       if (!current) throw new Error('Inventory entry is no longer active.');
       const rawPrice = changes.unitPrice === undefined ? current.unitPrice : changes.unitPrice;
       const unitPrice = rawPrice === null ? null : Number(rawPrice);
-      if (unitPrice !== null && (!Number.isFinite(unitPrice) || unitPrice <= 0)) throw new Error('Unit price must be greater than zero, or null when unknown.');
+      if (unitPrice !== null && (!Number.isFinite(unitPrice) || unitPrice <= 0)) throw new Error('Unit price must be greater than zero, or leave it blank if unknown.');
       const category = String(changes.category ?? current.category) as InventoryCategory;
       const quantityIn = category === 'SCRAP' ? goldWeight(changes.quantityIn ?? changes.goldIn ?? current.quantityIn) : Number(changes.quantityIn ?? changes.goldIn ?? current.quantityIn);
       const quantityOut = category === 'SCRAP' ? goldWeight(changes.quantityOut ?? changes.goldOut ?? current.quantityOut) : Number(changes.quantityOut ?? changes.goldOut ?? current.quantityOut);

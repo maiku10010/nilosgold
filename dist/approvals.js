@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.queueStaffChanges = queueStaffChanges;
+const readableError_1 = require("./lib/readableError");
 const jobCostingSchema_1 = require("./lib/jobCostingSchema");
 const serviceRules_1 = require("./lib/serviceRules");
 const rounding_1 = require("./rounding");
@@ -93,7 +94,7 @@ function normalizedChanges(body, spec, serviceType) {
         else if (numericFields.has(key)) {
             const value = spec.entity === 'JOB_COST' ? (0, rounding_1.roundTwo)(raw) : Number(raw);
             if (!Number.isFinite(value) || value < 0 || (positiveFields.has(key) && value <= 0))
-                throw new Error(`Enter a valid ${key}.`);
+                throw new Error(`Enter a valid ${(0, readableError_1.fieldLabel)(key)}.`);
             changes[key] = value;
         }
         else if (key === 'isFullyPaid' && typeof raw === 'boolean') {
@@ -121,9 +122,9 @@ function normalizedChanges(body, spec, serviceType) {
         else if (typeof raw === 'string') {
             const value = raw.trim();
             if (!value && !nullableStringFields.has(key))
-                throw new Error(`${key} cannot be empty.`);
+                throw new Error(`${(0, readableError_1.fieldLabel)(key)} cannot be empty.`);
             if (value.length > 500)
-                throw new Error(`${key} is too long.`);
+                throw new Error(`${(0, readableError_1.fieldLabel)(key)} is too long.`);
             if (key === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
                 throw new Error('Enter a valid email address.');
             if (['contactNum', 'contactInfo'].includes(key) && value && !(0, validation_1.isValidPHContact)(raw))
@@ -131,7 +132,7 @@ function normalizedChanges(body, spec, serviceType) {
             changes[key] = value || (nullableStringFields.has(key) ? null : value);
         }
         else {
-            throw new Error(`Invalid value for ${key}.`);
+            throw new Error(`Invalid value for ${(0, readableError_1.fieldLabel)(key)}.`);
         }
     }
     if (Object.keys(changes).length === 0)
@@ -329,7 +330,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
             const rawPrice = changes.unitPrice === undefined ? current.unitPrice : changes.unitPrice;
             const unitPrice = rawPrice === null ? null : Number(rawPrice);
             if (unitPrice !== null && (!Number.isFinite(unitPrice) || unitPrice <= 0))
-                throw new Error('Unit price must be greater than zero, or null when unknown.');
+                throw new Error('Unit price must be greater than zero, or leave it blank if unknown.');
             const category = String(changes.category ?? current.category);
             const quantityIn = category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(changes.quantityIn ?? changes.goldIn ?? current.quantityIn) : Number(changes.quantityIn ?? changes.goldIn ?? current.quantityIn);
             const quantityOut = category === 'SCRAP' ? (0, goldAllocation_1.goldWeight)(changes.quantityOut ?? changes.goldOut ?? current.quantityOut) : Number(changes.quantityOut ?? changes.goldOut ?? current.quantityOut);

@@ -6,6 +6,7 @@ exports.validateServiceFields = validateServiceFields;
 exports.getAllowedFields = getAllowedFields;
 exports.stripDisallowedFields = stripDisallowedFields;
 exports.getInquiryServiceType = getInquiryServiceType;
+const readableError_1 = require("./readableError");
 exports.SERVICE_RULES = {
     Repair: { gold: true, stone: true, scrap: true, labor: true },
     Custom: { gold: true, stone: true, scrap: true, labor: true },
@@ -27,7 +28,7 @@ function validateServiceFields(serviceType, payload) {
             continue;
         for (const field of fields[key]) {
             if (payload[field] !== undefined && payload[field] !== null)
-                throw Object.assign(new Error(`${field} is not allowed for ${serviceType}.`), { statusCode: 400, field });
+                throw Object.assign(new Error(`${(0, readableError_1.fieldLabel)(field)} is not used for ${serviceType} jobs.`), { statusCode: 400, field });
         }
     }
     return rules;

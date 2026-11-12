@@ -1,4 +1,5 @@
 import express from 'express';
+import { readableError } from './lib/readableError';
 import cors from 'cors';
 import 'dotenv/config';
 
@@ -20,6 +21,14 @@ import { assertAllowedOrigin, authenticate, isAllowedOrigin, requireAdmin, requi
 import { auditMutations } from './audit';
 
 const app = express();
+
+// Keep field identifiers in metadata, while presenting readable errors in every route.
+app.use((_req, res, next) => {
+  const json = res.json.bind(res);
+  res.json = (body: any) => json(res.statusCode >= 400 && body && typeof body === 'object' && 'error' in body
+    ? { ...body, error: readableError(body.error) } : body);
+  next();
+});
 
 app.use(cors({
   origin(origin, callback) { callback(null, !origin || isAllowedOrigin(origin)); },

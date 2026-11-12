@@ -37,6 +37,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
+const readableError_1 = require("./lib/readableError");
 const cors_1 = __importDefault(require("cors"));
 require("dotenv/config");
 // Import modular CRUD routers
@@ -56,6 +57,13 @@ const approvals_1 = __importStar(require("./approvals"));
 const auth_2 = require("./auth");
 const audit_1 = require("./audit");
 const app = (0, express_1.default)();
+// Keep field identifiers in metadata, while presenting readable errors in every route.
+app.use((_req, res, next) => {
+    const json = res.json.bind(res);
+    res.json = (body) => json(res.statusCode >= 400 && body && typeof body === 'object' && 'error' in body
+        ? { ...body, error: (0, readableError_1.readableError)(body.error) } : body);
+    next();
+});
 app.use((0, cors_1.default)({
     origin(origin, callback) { callback(null, !origin || (0, auth_2.isAllowedOrigin)(origin)); },
     credentials: true,

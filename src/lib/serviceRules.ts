@@ -1,3 +1,4 @@
+import { fieldLabel } from "./readableError";
 export const SERVICE_RULES = {
   Repair: { gold: true, stone: true, scrap: true, labor: true },
   Custom: { gold: true, stone: true, scrap: true, labor: true },
@@ -20,7 +21,7 @@ export function validateServiceFields(serviceType: unknown, payload: Record<stri
   for (const key of Object.keys(fields) as Array<keyof typeof fields>) {
     if (rules[key]) continue;
     for (const field of fields[key]) {
-      if (payload[field] !== undefined && payload[field] !== null) throw Object.assign(new Error(`${field} is not allowed for ${serviceType}.`), { statusCode: 400, field });
+      if (payload[field] !== undefined && payload[field] !== null) throw Object.assign(new Error(`${fieldLabel(field)} is not used for ${serviceType} jobs.`), { statusCode: 400, field });
     }
   }
   return rules;

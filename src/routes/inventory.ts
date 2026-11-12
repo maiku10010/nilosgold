@@ -30,7 +30,7 @@ function parseMovement(body: any, existing?: { category: string; itemName: strin
   if (!unitsByCategory[category]?.includes(unit)) return `Choose a supported unit for ${category.toLowerCase()}.`;
   if (!itemName) return 'Enter an item description.';
   if (![quantityIn, quantityOut, quantityLoss].every(isNonNegativeNumber) || Number(quantityIn) + Number(quantityOut) + Number(quantityLoss) <= 0) return 'Enter a positive quantity for at least one movement.';
-  if (unitPrice !== null && !isPositiveNumber(unitPrice)) return 'Unit price must be greater than zero, or null when unknown.';
+  if (unitPrice !== null && !isPositiveNumber(unitPrice)) return 'Unit price must be greater than zero, or leave it blank if unknown.';
   if (category === 'GOLD' && goldKarat === null && !existing) return 'Choose a gold karat from 10K to 24K.';
   if (['GOLD', 'SCRAP'].includes(category) && goldKarat !== null && (!Number.isInteger(goldKarat) || goldKarat < 10 || goldKarat > 24)) return 'Gold karat must be a whole number from 10K to 24K.';
   if (!['GOLD', 'SCRAP'].includes(category) && goldKarat !== null) return 'Karat can only be set for gold or scrap inventory.';
