@@ -89,7 +89,7 @@ router.patch('/:referenceId/details', requireAdmin, async (req: Request, res: Re
       const rows = await tx.inventory.findMany({ where: { deletedAt: null, category: existing.category } });
       const matches = (row: typeof existing) => existing.category === 'GOLD' ? row.goldKarat === existing.goldKarat
         : existing.category === 'SCRAP' || (row.unit === existing.unit && row.itemName.trim().toLowerCase() === existing.itemName.trim().toLowerCase());
-      if (!['GOLD', 'SCRAP'].includes(existing.category) && rows.some(row => !matches(row) && row.unit === existing.unit && row.itemName.trim().toLowerCase() === itemName.toLowerCase()))
+      if (!['GOLD', 'SILVER', 'SCRAP'].includes(existing.category) && rows.some(row => !matches(row) && row.unit === existing.unit && row.itemName.trim().toLowerCase() === itemName.toLowerCase()))
         throw Object.assign(new Error('Another item already has that description. Choose a different description.'), { statusCode: 409 });
       await tx.inventory.updateMany({ where: { referenceId: { in: rows.filter(matches).map(row => row.referenceId) } }, data: { itemName } });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -105,7 +105,7 @@ router.put('/:referenceId', async (req: Request, res: Response) => {
     const targetId = Array.isArray(req.params.referenceId) ? req.params.referenceId[0] : req.params.referenceId;
     const existing = await prisma.inventory.findFirst({ where: { referenceId: targetId, deletedAt: null } });
     if (!existing) return res.status(404).json({ error: 'Inventory entry not found or already archived.' });
-    if (existing.jobCostId && ['GOLD', 'SCRAP'].includes(existing.category)) return res.status(409).json({ error: 'Edit the linked job costing to adjust this automatic movement.' });
+    if (existing.jobCostId && ['GOLD', 'SILVER', 'SCRAP'].includes(existing.category)) return res.status(409).json({ error: 'Edit the linked job costing to adjust this automatic movement.' });
     const parsed = parseMovement(req.body, existing);
     if (typeof parsed === 'string') return res.status(400).json({ error: parsed });
     const saved = await prisma.$transaction(async tx => {
@@ -131,7 +131,7 @@ router.delete('/:referenceId', async (req: Request, res: Response) => {
     const targetId = Array.isArray(req.params.referenceId) ? req.params.referenceId[0] : req.params.referenceId;
     const deleted = await prisma.$transaction(async tx => {
       const existing = await tx.inventory.findFirst({ where: { referenceId: targetId, deletedAt: null } });
-      if (existing?.jobCostId && ['GOLD', 'SCRAP'].includes(existing.category)) throw Object.assign(new Error('Delete or edit the linked job costing to adjust this automatic movement.'), { statusCode: 409 });
+      if (existing?.jobCostId && ['GOLD', 'SILVER', 'SCRAP'].includes(existing.category)) throw Object.assign(new Error('Delete or edit the linked job costing to adjust this automatic movement.'), { statusCode: 409 });
       const result = await tx.inventory.updateMany({ where: { referenceId: targetId, deletedAt: null }, data: { deletedAt: new Date() } });
       if (!result.count) return 0;
       await validateInventoryLedger(tx);

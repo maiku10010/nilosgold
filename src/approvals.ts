@@ -13,7 +13,7 @@ import { isTodayOrFutureDate, isValidPHContact } from './validation';
 import { InventoryCategory } from '@prisma/client';
 import { paidTotal, setSalePaidTotal } from './accounting';
 import { updateSaleJobStatus, validSaleJobStatus } from './saleJobStatus';
-import { goldWeight, syncGoldAllocation, releaseGoldAllocation, reverseJobInventory, restoreScrapRecovery } from './goldAllocation';
+import { findJobMaterialSource, goldWeight, syncGoldAllocation, releaseGoldAllocation, reverseJobInventory, restoreScrapRecovery } from './goldAllocation';
 
 type Entity = 'SALE' | 'JOB_COST' | 'INQUIRY' | 'EXPENSE' | 'INVENTORY' | 'CLIENT';
 type Action = 'UPDATE' | 'DELETE';
@@ -51,7 +51,7 @@ async function findCurrent(entity: Entity, id: string): Promise<any> {
     case 'JOB_COST': {
       const job = await prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } }, inventoryMovement: true } });
       if (!job) return null;
-      const source = await prisma.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
+      const source = await findJobMaterialSource(prisma, job);
       return { ...job, goldSourceId: job.customerGold ? 'CUSTOMER_GOLD' : source?.referenceId ?? null };
     }
     case 'INQUIRY': return prisma.inquiries.findFirst({ where: { inquiryId: id, deletedAt: null }, include: { jobCost: true } });
@@ -216,7 +216,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
           if (row.category === 'SCRAP') continue;
           await tx.inventory.update({ where: { referenceId: row.referenceId }, data: {
             itemName: row.itemName, goldKarat: row.goldKarat ?? null, unit: row.unit,
-            quantityIn: row.quantityIn, quantityOut: row.quantityOut, quantityLoss: row.category === 'GOLD' ? 0 : row.quantityLoss, unitPrice: row.unitPrice,
+            quantityIn: row.quantityIn, quantityOut: row.quantityOut, quantityLoss: ['GOLD', 'SILVER'].includes(row.category) ? 0 : row.quantityLoss, unitPrice: row.unitPrice,
             deletedAt: row.deletedAt ? new Date(row.deletedAt) : null,
           } });
         }
@@ -225,7 +225,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       } else if (!rules.gold) {
         await releaseGoldAllocation(tx, id);
       } else {
-        const source = jobFields.goldSourceId || job.goldKarat == null ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
+        const source = jobFields.goldSourceId ? null : await findJobMaterialSource(tx, job);
         await syncGoldAllocation(tx, {
           serviceType: job.serviceType,
           goldSourceId: jobFields.goldSourceId === undefined ? (job.customerGold ? 'CUSTOMER_GOLD' : source?.referenceId) : jobFields.goldSourceId,

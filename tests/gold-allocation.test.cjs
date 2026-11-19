@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { Prisma } = require('@prisma/client');
-const { goldMaterialCost, goldWeight, syncGoldAllocation } = require('../dist/goldAllocation');
+const { goldMaterialCost, goldWeight, syncGoldAllocation, releaseGoldAllocation, findJobMaterialSource } = require('../dist/goldAllocation');
 const { calculateInventoryBalances } = require('../dist/inventoryLedger');
 
 const source = (data = {}) => ({ referenceId: '18K-IN', category: 'GOLD', goldKarat: 18, itemName: 'Gold · 18K', unit: 'grams', quantityIn: new Prisma.Decimal('1.2'), quantityOut: new Prisma.Decimal(0), quantityLoss: new Prisma.Decimal(0), deletedAt: null, jobCostId: null, ...data });
@@ -11,8 +11,8 @@ function database(rows) {
   return {
     rows, job,
     inventory: {
-      findFirst: async ({ where }) => rows.find(row => !row.deletedAt && row.quantityIn.greaterThan(0) && (where.referenceId ? row.referenceId === where.referenceId : row.goldKarat === where.goldKarat)) ?? null,
-      findMany: async ({ where = {} } = {}) => rows.filter(row => categoryMatches(row, where.category) && (!Object.hasOwn(where, 'goldKarat') || row.goldKarat === where.goldKarat) && (!where.jobCostId || row.jobCostId === where.jobCostId) && (!Object.hasOwn(where, 'deletedAt') || row.deletedAt === where.deletedAt)),
+      findFirst: async ({ where }) => rows.find(row => !row.deletedAt && row.quantityIn.greaterThan(0) && categoryMatches(row, where.category) && (!where.referenceId || row.referenceId === where.referenceId) && (!Object.hasOwn(where, 'goldKarat') || row.goldKarat === where.goldKarat) && (!where.itemName || row.itemName.trim().toLowerCase() === where.itemName.equals.toLowerCase())) ?? null,
+      findMany: async ({ where = {} } = {}) => rows.filter(row => categoryMatches(row, where.category) && (!where.itemName || row.itemName.trim().toLowerCase() === where.itemName.equals.toLowerCase()) && (!where.unit || row.unit === where.unit) && (!Object.hasOwn(where, 'goldKarat') || row.goldKarat === where.goldKarat) && (!where.jobCostId || row.jobCostId === where.jobCostId) && (!Object.hasOwn(where, 'deletedAt') || row.deletedAt === where.deletedAt)),
       create: async ({ data }) => { const row = source(data); rows.push(row); return row; },
       update: async ({ where, data }) => { const row = rows.find(row => row.referenceId === where.referenceId); Object.assign(row, data); return row; },
       updateMany: async ({ where, data }) => { rows.filter(row => where.referenceId ? where.referenceId.in.includes(row.referenceId) : row.jobCostId === where.jobCostId && categoryMatches(row, where.category)).forEach(row => Object.assign(row, data)); return {}; },
@@ -64,7 +64,7 @@ test('gold weights keep milligrams and reject excess precision or missing gold s
   assert.equal(goldWeight('0.001').toString(), '0.001');
   assert.throws(() => goldWeight('0.0001'), /3 decimal/);
   assert.throws(() => goldWeight('-1'), /non-negative/);
-  await assert.rejects(() => syncGoldAllocation(database([source()]), allocation({ goldSourceId: '' })), /Choose a gold source/);
+  await assert.rejects(() => syncGoldAllocation(database([source()]), allocation({ goldSourceId: '' })), /Choose a material source/);
   assert.equal(goldMaterialCost('1', '.2', '8000').toString(), '9600');
   assert.equal(goldMaterialCost('.0005', '0', '8000').toString(), '4');
 });
@@ -561,4 +561,62 @@ test('customer gold works without stock and switching sources restores shop stoc
   assert.equal(tx.job.goldKarat, null);
   assert.equal(scrapNet(tx), '0');
   assert.ok(tx.rows.filter(row => row.category === 'GOLD' && row.jobCostId === 'JOB-1').every(row => row.deletedAt));
+});
+
+
+test('silver allocation deducts its own item, restores edits, and switches back to gold', async () => {
+  const silver = source({ referenceId: 'SILVER-IN', category: 'SILVER', itemName: 'Sterling 925', goldKarat: null, quantityIn: new Prisma.Decimal(2) });
+  const tx = database([source(), silver, source({ referenceId: 'OTHER-SILVER', category: 'SILVER', itemName: 'Fine silver', goldKarat: null, quantityIn: new Prisma.Decimal(20) })]);
+  const input = allocation({ goldSourceId: 'SILVER-IN', goldCostPerG: 100 });
+  await syncGoldAllocation(tx, input);
+  const movement = tx.rows.find(row => row.jobCostId === 'JOB-1' && row.quantityIn.isZero() && !row.deletedAt);
+  assert.equal(movement.category, 'SILVER');
+  assert.equal(movement.goldKarat, null);
+  assert.equal(calculateInventoryBalances(tx.rows.filter(row => !row.deletedAt)).get(movement.referenceId), 1);
+  assert.equal(scrapNet(tx), '0');
+  assert.equal(tx.rows.find(row => row.jobCostId && row.quantityIn.greaterThan(0) && !row.deletedAt).itemName, 'Scrap silver \u00b7 Sterling 925');
+  assert.equal((await findJobMaterialSource(tx, tx.job)).referenceId, silver.referenceId);
+  await syncGoldAllocation(tx, { ...input, goldUsed: goldWeight('1.5') });
+  assert.equal(movement.quantityOut.toString(), '1.5');
+  await assert.rejects(() => syncGoldAllocation(tx, { ...input, goldUsed: goldWeight('2.001') }), /Insufficient Sterling 925/);
+  await syncGoldAllocation(tx, allocation());
+  assert.equal(movement.category, 'GOLD');
+  assert.equal(tx.rows.filter(row => row.jobCostId && row.category === 'SILVER' && !row.deletedAt).length, 0);
+  assert.equal(scrapNet(tx), '0.2');
+});
+
+test('releasing silver restores stock, and a zero-weight selection survives approval edits', async () => {
+  const silver = source({ referenceId: 'SILVER-IN', category: 'SILVER', itemName: 'Sterling 925', goldKarat: null, quantityIn: new Prisma.Decimal(2) });
+  const tx = database([silver]);
+  await syncGoldAllocation(tx, allocation({ goldSourceId: silver.referenceId, goldUsed: goldWeight('0') }));
+  assert.equal((await findJobMaterialSource(tx, tx.job)).referenceId, silver.referenceId);
+  await releaseGoldAllocation(tx, 'JOB-1');
+  assert.ok(tx.rows.filter(row => row.jobCostId).every(row => row.deletedAt));
+  assert.equal((await findJobMaterialSource(tx, tx.job)), null);
+});
+
+
+test('staff approval preserves the silver source when only its weight changes', async () => {
+  const tx = database([source({ referenceId: 'SILVER-IN', category: 'SILVER', itemName: 'Sterling 925', goldKarat: null, quantityIn: new Prisma.Decimal(2) })]);
+  await syncGoldAllocation(tx, allocation({ goldSourceId: 'SILVER-IN', goldUsed: goldWeight('.5'), goldScrap: goldWeight('0') }));
+  tx.job.goldUsed = '.5';
+  Object.assign(prisma, tx);
+  let queued;
+  prisma.approvalRequest = {
+    findFirst: async () => null,
+    create: async ({ data }) => (queued = { ...data, requestId: 'SILVER-APP', status: 'PENDING' }),
+    findUnique: async () => queued,
+    update: async ({ data }) => ({ ...queued, ...data }),
+  };
+  prisma.systemLog = { create: async () => ({}) };
+  prisma.$transaction = async fn => fn(prisma);
+  const pending = response();
+  await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: { empId: 'STAFF', empRole: 'Staff' }, body: { goldUsed: '1.25' } }, pending, () => assert.fail('must queue'));
+  assert.equal(pending.statusCode, 202);
+  assert.equal(queued.beforeData.goldSourceId, 'SILVER-IN');
+  const reviewed = response();
+  await approve({ params: { requestId: 'SILVER-APP' }, body: {}, user: { empId: 'ADMIN', empRole: 'Admin', empName: 'Admin' } }, reviewed);
+  assert.equal(reviewed.statusCode, 200, JSON.stringify(reviewed.body));
+  assert.equal(tx.rows.find(row => row.jobCostId && !row.deletedAt).quantityOut.toString(), '1.25');
+  assert.equal(tx.job.goldKarat, null);
 });

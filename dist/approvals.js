@@ -47,7 +47,7 @@ async function findCurrent(entity, id) {
             const job = await db_1.prisma.job_Cost.findFirst({ where: { jobCostId: id, deletedAt: null }, include: { inquiry: true, sales: { include: { client: true } }, inventoryMovement: true } });
             if (!job)
                 return null;
-            const source = await db_1.prisma.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
+            const source = await (0, goldAllocation_1.findJobMaterialSource)(db_1.prisma, job);
             return { ...job, goldSourceId: job.customerGold ? 'CUSTOMER_GOLD' : source?.referenceId ?? null };
         }
         case 'INQUIRY': return db_1.prisma.inquiries.findFirst({ where: { inquiryId: id, deletedAt: null }, include: { jobCost: true } });
@@ -282,7 +282,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                         continue;
                     await tx.inventory.update({ where: { referenceId: row.referenceId }, data: {
                             itemName: row.itemName, goldKarat: row.goldKarat ?? null, unit: row.unit,
-                            quantityIn: row.quantityIn, quantityOut: row.quantityOut, quantityLoss: row.category === 'GOLD' ? 0 : row.quantityLoss, unitPrice: row.unitPrice,
+                            quantityIn: row.quantityIn, quantityOut: row.quantityOut, quantityLoss: ['GOLD', 'SILVER'].includes(row.category) ? 0 : row.quantityLoss, unitPrice: row.unitPrice,
                             deletedAt: row.deletedAt ? new Date(row.deletedAt) : null,
                         } });
                 }
@@ -293,7 +293,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                 await (0, goldAllocation_1.releaseGoldAllocation)(tx, id);
             }
             else {
-                const source = jobFields.goldSourceId || job.goldKarat == null ? null : await tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
+                const source = jobFields.goldSourceId ? null : await (0, goldAllocation_1.findJobMaterialSource)(tx, job);
                 await (0, goldAllocation_1.syncGoldAllocation)(tx, {
                     serviceType: job.serviceType,
                     goldSourceId: jobFields.goldSourceId === undefined ? (job.customerGold ? 'CUSTOMER_GOLD' : source?.referenceId) : jobFields.goldSourceId,

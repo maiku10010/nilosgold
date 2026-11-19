@@ -7,7 +7,7 @@ export function goldWeight(value: unknown): Prisma.Decimal {
     if (!weight.isFinite() || weight.isNegative() || weight.decimalPlaces() > 3) throw new Error();
     return weight;
   } catch {
-    throw Object.assign(new Error('Enter a non-negative gold weight with at most 3 decimal places.'), { statusCode: 400, field: 'goldUsed' });
+    throw Object.assign(new Error('Enter a non-negative material weight with at most 3 decimal places.'), { statusCode: 400, field: 'goldUsed' });
   }
 }
 
@@ -31,33 +31,38 @@ export async function syncGoldAllocation(tx: Prisma.TransactionClient, input: {
     return null;
   }
   if (typeof input.goldSourceId !== 'string' || !input.goldSourceId) {
-    throw Object.assign(new Error('Choose a gold source.'), { statusCode: 400, field: 'goldSourceId' });
+    throw Object.assign(new Error('Choose a material source.'), { statusCode: 400, field: 'goldSourceId' });
   }
-  const source = await tx.inventory.findFirst({ where: { referenceId: input.goldSourceId, category: 'GOLD', deletedAt: null, quantityIn: { gt: 0 } } });
-  if (!source || source.goldKarat == null) throw Object.assign(new Error('Choose an active gold source with a recorded karat.'), { statusCode: 400, field: 'goldSourceId' });
-  const rows = await tx.inventory.findMany({ where: { category: 'GOLD', goldKarat: source.goldKarat, deletedAt: null } });
+  const source = await tx.inventory.findFirst({ where: { referenceId: input.goldSourceId, category: { in: ['GOLD', 'SILVER'] }, deletedAt: null, quantityIn: { gt: 0 } } });
+  if (!source || (source.category === 'GOLD' && source.goldKarat == null)) throw Object.assign(new Error('Choose active silver stock or gold stock with a recorded karat.'), { statusCode: 400, field: 'goldSourceId' });
+  const rows = await tx.inventory.findMany({ where: { category: source.category, ...(source.category === 'GOLD' ? { goldKarat: source.goldKarat } : { itemName: { equals: source.itemName.trim(), mode: 'insensitive' }, unit: 'grams' }), deletedAt: null } });
   const available = rows.filter(row => row.jobCostId !== input.jobCostId).reduce((sum, row) =>
     sum.plus(new Prisma.Decimal(row.quantityIn).minus(row.quantityOut).minus(row.quantityLoss).times(row.unit === 'troy oz' ? '31.1034768' : '1')), new Prisma.Decimal(0));
   const required = input.goldUsed;
-  const name = goldSourceName(source.goldKarat);
+  const name = source.category === 'SILVER' ? source.itemName : goldSourceName(source.goldKarat);
   if (required.greaterThan(available)) {
-    throw Object.assign(new Error(`Insufficient ${name}: gold used is ${required.toString()} g; available is ${Prisma.Decimal.max(0, available).toString()} g.`), { statusCode: 409, field: 'goldUsed' });
+    throw Object.assign(new Error(`Insufficient ${name}: material used is ${required.toString()} g; available is ${Prisma.Decimal.max(0, available).toString()} g.`), { statusCode: 409, field: 'goldUsed' });
   }
-  const movements = await tx.inventory.findMany({ where: { jobCostId: input.jobCostId, category: 'GOLD' } });
-  const current = movements[0];
+  const movements = await tx.inventory.findMany({ where: { jobCostId: input.jobCostId, category: { in: ['GOLD', 'SILVER'] } } });
+  const current = movements.find(row => new Prisma.Decimal(row.quantityIn).isZero());
   // Retain one allocation per job; old/deleted allocations must not deduct twice.
-  if (movements.length > 1) await tx.inventory.updateMany({ where: { referenceId: { in: movements.slice(1).map(row => row.referenceId) } }, data: { deletedAt: new Date() } });
+  if (movements.some(row => row !== current)) await tx.inventory.updateMany({ where: { referenceId: { in: movements.filter(row => row !== current).map(row => row.referenceId) } }, data: { deletedAt: new Date() } });
   const data = {
-    itemName: source.itemName, goldKarat: source.goldKarat, unit: 'grams', category: 'GOLD' as const,
+    itemName: source.itemName, goldKarat: source.goldKarat, unit: 'grams', category: source.category,
     quantityIn: new Prisma.Decimal(0), quantityOut: input.goldUsed, quantityLoss: new Prisma.Decimal(0),
-    unitPrice: input.goldCostPerG, deletedAt: required.isZero() ? new Date() : null,
+    unitPrice: input.goldCostPerG, deletedAt: required.isZero() && source.category === 'GOLD' ? new Date() : null,
   };
   if (current) await tx.inventory.update({ where: { referenceId: current.referenceId }, data });
-  else if (!required.isZero()) await tx.inventory.create({ data: {
+  else if (!required.isZero() || source.category === 'SILVER') await tx.inventory.create({ data: {
     ...data, referenceId: friendlyId(), universalReferenceId: input.universalReferenceId, jobCostId: input.jobCostId,
   } });
   // Recovered scrap is a separate stock pool, never usable gold stock.
-  await syncScrapRecovery(tx, input.jobCostId, source.goldKarat, input.goldScrap);
+  await syncScrapRecovery(tx, input.jobCostId, source.goldKarat, source.category === 'SILVER' ? new Prisma.Decimal(0) : input.goldScrap);
+  if (source.category === 'SILVER' && !input.goldScrap.isZero()) await tx.inventory.create({ data: {
+    referenceId: friendlyId(), jobCostId: input.jobCostId, universalReferenceId: input.universalReferenceId,
+    itemName: `Scrap silver · ${source.itemName}`, category: 'SILVER', unit: 'grams', goldKarat: null,
+    quantityIn: input.goldScrap, quantityOut: new Prisma.Decimal(0), quantityLoss: new Prisma.Decimal(0), unitPrice: 0,
+  } });
   await tx.job_Cost.update({ where: { jobCostId: input.jobCostId }, data: { goldKarat: source.goldKarat, customerGold: false } });
   return source.goldKarat;
 }
@@ -106,6 +111,15 @@ export async function reverseJobInventory(tx: Prisma.TransactionClient, jobCostI
 
 export async function releaseGoldAllocation(tx: Prisma.TransactionClient, jobCostId: string) {
   await syncScrapRecovery(tx, jobCostId, null, new Prisma.Decimal(0));
-  await tx.inventory.updateMany({ where: { jobCostId, category: 'GOLD' }, data: { deletedAt: new Date() } });
+  await tx.inventory.updateMany({ where: { jobCostId, category: { in: ['GOLD', 'SILVER'] } }, data: { deletedAt: new Date() } });
   await tx.job_Cost.update({ where: { jobCostId }, data: { goldKarat: null, customerGold: false } });
+}
+
+/** Reconstruct the selected pool for approval edits, including zero-weight silver allocations. */
+export async function findJobMaterialSource(tx: Prisma.TransactionClient, job: { jobCostId: string; goldKarat: number | null }) {
+  const movements = await tx.inventory.findMany({ where: { jobCostId: job.jobCostId, category: 'SILVER', deletedAt: null } });
+  const silver = movements.find(row => new Prisma.Decimal(row.quantityIn).isZero());
+  if (silver) return tx.inventory.findFirst({ where: { category: 'SILVER', itemName: { equals: silver.itemName.trim(), mode: 'insensitive' }, unit: 'grams', deletedAt: null, quantityIn: { gt: 0 } } });
+  if (job.goldKarat == null) return null;
+  return tx.inventory.findFirst({ where: { category: 'GOLD', goldKarat: job.goldKarat, deletedAt: null, quantityIn: { gt: 0 } } });
 }

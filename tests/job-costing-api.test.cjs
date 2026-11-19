@@ -15,6 +15,7 @@ const decimal = value => new Prisma.Decimal(value ?? 0);
 function matches(row, where = {}) {
   return Object.entries(where).every(([key, value]) => {
     if (value && typeof value === 'object' && !(value instanceof Date)) {
+      if ('equals' in value) return String(row[key]).toLowerCase() === String(value.equals).toLowerCase();
       if ('gt' in value) return decimal(row[key]).greaterThan(value.gt);
       if ('not' in value) return row[key] !== value.not;
       if ('in' in value) return value.in.includes(row[key]);
@@ -184,4 +185,20 @@ test('customer gold saves with zero cost and no shop stock, and survives editing
   assert.equal(edited.status, 200);
   assert.equal(fixture.jobs[0].customerGold, true);
   assert.equal(fixture.inventory.length, 0);
+});
+
+
+test('HTTP costing accepts silver, checks its stock, and edits back to gold without double deduction', async () => {
+  fixture.inventory.push({ referenceId: 'SILVER-925', category: 'SILVER', goldKarat: null, itemName: 'Sterling 925', unit: 'grams', quantityIn: decimal(2), quantityOut: decimal(0), quantityLoss: decimal(0), deletedAt: null, jobCostId: null });
+  const created = await request('POST', '', body({ goldSourceId: 'SILVER-925', goldCostPerG: 100, goldScrap: '.2' }));
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  assert.equal(created.data.goldKarat, null);
+  assert.equal(balance('GOLD'), '1.2');
+  assert.equal(balance('SCRAP'), '0');
+  const silverOut = fixture.inventory.find(row => row.jobCostId === created.data.jobCostId && row.quantityOut.greaterThan(0));
+  assert.equal(silverOut.category, 'SILVER');
+  const edited = await request('PUT', '/' + created.data.jobCostId, body({ invoiceId: created.data.sales.invoiceId, goldSourceId: 'GOLD-18K', goldUsed: '.5' }));
+  assert.equal(edited.status, 200, JSON.stringify(edited.data));
+  assert.equal(balance('SILVER'), '2');
+  assert.equal(balance('GOLD'), '0.7');
 });
