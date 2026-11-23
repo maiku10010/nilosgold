@@ -44,7 +44,7 @@ router.post('/', async (req: Request, res: Response) => {
       const goldScrap = goldWeight(payload.goldScrap ?? 0);
       const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);
       const stoneCost = parseStoneCost(payload.stoneCost);
-      const laborCost = calculateLaborCost(inquiry.quotedPrice);
+      const laborCost = serviceType === 'Custom' ? calculateLaborCost(inquiry.quotedPrice) : roundTwo(payload.laborCost ?? 0);
       const laborCharge = roundTwo(payload.laborCharge ?? 0);
       const otherCost = roundTwo(payload.otherCost ?? 0);
       const sellingPrice = roundTwo(payload.sellingPrice);
@@ -213,11 +213,13 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
       const goldScrap = goldWeight(payload.goldScrap ?? 0);
       const goldCostPerG = roundTwo(payload.goldCostPerG ?? 0);
       const stoneCost = parseStoneCost(payload.stoneCost);
-      const laborCost = calculateLaborCost(existing.inquiry?.quotedPrice ?? existing.sales.price);
+      const laborCost = existing.serviceType === 'Custom'
+        ? calculateLaborCost(existing.inquiry?.quotedPrice ?? existing.sales.price)
+        : payload.laborCost === undefined ? undefined : roundTwo(payload.laborCost ?? 0);
       const laborCharge = roundTwo(payload.laborCharge ?? 0);
       const otherCost = roundTwo(payload.otherCost ?? 0);
       const sellingPrice = roundTwo(payload.sellingPrice);
-      if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(isNonNegativeNumber) || !isNonNegativeNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
+      if (![stoneCost ?? 0, laborCost ?? 0, laborCharge, otherCost].every(isNonNegativeNumber) || !isNonNegativeNumber(goldCostPerG) || !isPositiveNumber(sellingPrice)) {
         throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
       }
 
@@ -241,7 +243,7 @@ router.put('/:jobCostId', async (req: Request, res: Response) => {
           goldScrap: rules.scrap ? goldScrap : null,
           goldCostPerG: rules.gold ? goldCostPerG : null,
           stoneCost: rules.stone ? stoneCost : null,
-          laborCost: rules.labor ? laborCost : null,
+          ...(laborCost !== undefined ? { laborCost: rules.labor ? laborCost : null } : {}),
           laborCharge: rules.labor ? laborCharge : null,
           otherCost,
           ...(req.body.itemName !== undefined ? { itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : null } : {}),

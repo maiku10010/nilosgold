@@ -322,7 +322,7 @@ test('direct Resize edits store stone cost as null and preserve measured-zero la
   await edit({ params: { jobCostId: 'JOB-1' }, body: { invoiceId: 'INV-1', clientName: 'Mia', goldSourceId: '18K-IN', goldUsed: '1', goldScrap: '0', goldCostPerG: 8000, stoneCost: null, laborCost: 0, sellingPrice: 15000 } }, result);
   assert.equal(result.statusCode, 200);
   assert.equal(result.body.stoneCost, null);
-  assert.equal(result.body.laborCost, 4500);
+  assert.equal(result.body.laborCost, 0);
   assert.equal(result.body.goldScrap.toString(), '0');
 });
 
@@ -355,7 +355,7 @@ test('Cleaning staff edits retain nulls through approval and undo and reject for
   const approved = response();
   await approve({ params: { requestId: 'APP-NULL' }, body: {}, user }, approved);
   assert.equal(approved.statusCode, 200);
-  assert.equal(tx.job.laborCost, 4500);
+  assert.equal(tx.job.laborCost, 1200);
   for (const key of ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost']) assert.equal(tx.job[key], null);
   const restored = response();
   await undo({ params: { requestId: 'APP-NULL' }, user }, restored);

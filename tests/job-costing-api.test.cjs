@@ -163,7 +163,14 @@ for (const serviceType of ['Repair', 'Resize', 'Cleaning']) {
   test(serviceType + ' can be costed without a gold source or manual labor', async () => {
     const created = await request('POST', '', { inquiryId: 'INQ-1', clientName: 'Mia', serviceType, sellingPrice: 15000 });
     assert.equal(created.status, 201);
-    assert.equal(Number(created.data.laborCost), 4500);
+    assert.equal(Number(created.data.laborCost), 0);
+    const editBody = { invoiceId: created.data.sales.invoiceId, clientName: 'Mia', sellingPrice: 15000 };
+    const edited = await request('PUT', '/' + created.data.jobCostId, { ...editBody, laborCost: 1200 });
+    assert.equal(edited.status, 200);
+    assert.equal(Number(edited.data.laborCost), 1200);
+    const unchanged = await request('PUT', '/' + created.data.jobCostId, editBody);
+    assert.equal(unchanged.status, 200);
+    assert.equal(Number(unchanged.data.laborCost), 1200);
     assert.equal(created.data.goldKarat, null);
     assert.equal(balance('GOLD'), '1.2');
   });

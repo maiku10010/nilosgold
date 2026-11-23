@@ -50,7 +50,7 @@ router.post('/', async (req, res) => {
             const goldScrap = (0, goldAllocation_1.goldWeight)(payload.goldScrap ?? 0);
             const goldCostPerG = (0, rounding_1.roundTwo)(payload.goldCostPerG ?? 0);
             const stoneCost = (0, jobCostingSchema_1.parseStoneCost)(payload.stoneCost);
-            const laborCost = (0, jobCostingSchema_1.calculateLaborCost)(inquiry.quotedPrice);
+            const laborCost = serviceType === 'Custom' ? (0, jobCostingSchema_1.calculateLaborCost)(inquiry.quotedPrice) : (0, rounding_1.roundTwo)(payload.laborCost ?? 0);
             const laborCharge = (0, rounding_1.roundTwo)(payload.laborCharge ?? 0);
             const otherCost = (0, rounding_1.roundTwo)(payload.otherCost ?? 0);
             const sellingPrice = (0, rounding_1.roundTwo)(payload.sellingPrice);
@@ -231,11 +231,13 @@ router.put('/:jobCostId', async (req, res) => {
             const goldScrap = (0, goldAllocation_1.goldWeight)(payload.goldScrap ?? 0);
             const goldCostPerG = (0, rounding_1.roundTwo)(payload.goldCostPerG ?? 0);
             const stoneCost = (0, jobCostingSchema_1.parseStoneCost)(payload.stoneCost);
-            const laborCost = (0, jobCostingSchema_1.calculateLaborCost)(existing.inquiry?.quotedPrice ?? existing.sales.price);
+            const laborCost = existing.serviceType === 'Custom'
+                ? (0, jobCostingSchema_1.calculateLaborCost)(existing.inquiry?.quotedPrice ?? existing.sales.price)
+                : payload.laborCost === undefined ? undefined : (0, rounding_1.roundTwo)(payload.laborCost ?? 0);
             const laborCharge = (0, rounding_1.roundTwo)(payload.laborCharge ?? 0);
             const otherCost = (0, rounding_1.roundTwo)(payload.otherCost ?? 0);
             const sellingPrice = (0, rounding_1.roundTwo)(payload.sellingPrice);
-            if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(validation_1.isNonNegativeNumber) || !(0, validation_1.isNonNegativeNumber)(goldCostPerG) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
+            if (![stoneCost ?? 0, laborCost ?? 0, laborCharge, otherCost].every(validation_1.isNonNegativeNumber) || !(0, validation_1.isNonNegativeNumber)(goldCostPerG) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
                 throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
             }
             if (rules.gold && payload.goldSourceId !== 'CUSTOMER_GOLD' && (existing.serviceType === 'Custom' || !!payload.goldSourceId) && !(0, validation_1.isPositiveNumber)(goldCostPerG))
@@ -261,7 +263,7 @@ router.put('/:jobCostId', async (req, res) => {
                     goldScrap: rules.scrap ? goldScrap : null,
                     goldCostPerG: rules.gold ? goldCostPerG : null,
                     stoneCost: rules.stone ? stoneCost : null,
-                    laborCost: rules.labor ? laborCost : null,
+                    ...(laborCost !== undefined ? { laborCost: rules.labor ? laborCost : null } : {}),
                     laborCharge: rules.labor ? laborCharge : null,
                     otherCost,
                     ...(req.body.itemName !== undefined ? { itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : null } : {}),

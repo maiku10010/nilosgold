@@ -13,10 +13,11 @@ NULL means unspecified. Each costing or inventory movement records one karat. AP
 The remove_legacy_import_support migration drops the legacy staging tables and import-only source metadata. It preserves operational clients, sales, payments, job costs, expenses, inventory rows, and gold karats. Existing migration history is retained so previously deployed databases can migrate forward.
 
 
-Job costing labor is calculated by the API as 30% of the linked inquiry's quotedPrice,
-rounded to cents. Submitted laborCost is ignored on create/update and staff approvals.
-Legacy jobs without an inquiry use their saved invoice price. Historical records are
-not bulk rewritten; approval reversals restore the original recorded labor.
+For Custom jobs, the API calculates labor as 30% of the linked inquiry's quotedPrice,
+rounded to cents. Legacy Custom jobs without an inquiry use their saved invoice price.
+Repair, Resize, and Cleaning accept a manual labor amount. It defaults to zero on
+creation and keeps its saved value when omitted from an edit. Approval reversals
+restore the original recorded labor.
 Gold source is required for Custom. Repair and Resize may omit it (or pass null/empty);
 these jobs retain entered material costs but do not deduct stock or recover scrap.
 Supplying a source retains the existing karat and inventory balance validation.

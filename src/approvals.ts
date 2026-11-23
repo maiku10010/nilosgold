@@ -74,6 +74,7 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec, serviceTyp
     }
     if (raw === undefined) continue;
     if (spec.entity === 'INVENTORY' && key === 'unitPrice' && raw === null) { changes[key] = null; continue; }
+    if (spec.entity === 'JOB_COST' && serviceType === 'Custom' && key === 'laborCost') continue;
     if (spec.entity === 'JOB_COST' && key === 'stoneCost') { changes[key] = parseStoneCost(raw); continue; }
     if (raw === null && Object.hasOwn(notApplicable, key)) { changes[key] = null; continue; }
     if (spec.entity === 'JOB_COST' && ['goldUsed', 'goldScrap'].includes(key)) {
@@ -198,12 +199,16 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       const payload = goldRestoreSnapshot ? changes : stripDisallowedFields(job.serviceType as ServiceType, changes);
       const rules = goldRestoreSnapshot ? serviceRules(job.serviceType) : validateServiceFields(job.serviceType, changes);
       const { sellingPrice, ...jobFields } = payload;
+      let laborCost = jobFields.laborCost as number | null | undefined;
+      if (!goldRestoreSnapshot && job.serviceType === 'Custom') {
+        laborCost = calculateLaborCost(job.inquiry?.quotedPrice ?? job.sales?.price);
+      }
       await tx.job_Cost.update({ where: { jobCostId: id }, data: {
         ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed === null ? null : goldWeight(jobFields.goldUsed) } : {}),
         ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap === null ? null : goldWeight(jobFields.goldScrap) } : {}),
         ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: jobFields.goldCostPerG === null ? null : Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
         ...(jobFields.stoneCost !== undefined ? { stoneCost: parseStoneCost(jobFields.stoneCost) } : {}),
-        laborCost: goldRestoreSnapshot ? jobFields.laborCost as number | null : calculateLaborCost(job.inquiry?.quotedPrice ?? job.sales?.price),
+        ...(laborCost !== undefined ? { laborCost } : {}),
         ...(jobFields.laborCharge !== undefined ? { laborCharge: jobFields.laborCharge as number | null } : {}),
         ...(jobFields.otherCost !== undefined ? { otherCost: jobFields.otherCost as number } : {}),
         ...(jobFields.itemName !== undefined ? { itemName: jobFields.itemName as string | null } : {}),

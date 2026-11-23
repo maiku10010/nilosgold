@@ -74,6 +74,8 @@ function normalizedChanges(body, spec, serviceType) {
             changes[key] = null;
             continue;
         }
+        if (spec.entity === 'JOB_COST' && serviceType === 'Custom' && key === 'laborCost')
+            continue;
         if (spec.entity === 'JOB_COST' && key === 'stoneCost') {
             changes[key] = (0, jobCostingSchema_1.parseStoneCost)(raw);
             continue;
@@ -263,12 +265,16 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
             const payload = goldRestoreSnapshot ? changes : (0, serviceRules_1.stripDisallowedFields)(job.serviceType, changes);
             const rules = goldRestoreSnapshot ? (0, serviceRules_1.serviceRules)(job.serviceType) : (0, serviceRules_1.validateServiceFields)(job.serviceType, changes);
             const { sellingPrice, ...jobFields } = payload;
+            let laborCost = jobFields.laborCost;
+            if (!goldRestoreSnapshot && job.serviceType === 'Custom') {
+                laborCost = (0, jobCostingSchema_1.calculateLaborCost)(job.inquiry?.quotedPrice ?? job.sales?.price);
+            }
             await tx.job_Cost.update({ where: { jobCostId: id }, data: {
                     ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed === null ? null : (0, goldAllocation_1.goldWeight)(jobFields.goldUsed) } : {}),
                     ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap === null ? null : (0, goldAllocation_1.goldWeight)(jobFields.goldScrap) } : {}),
                     ...(jobFields.goldCostPerG !== undefined ? { goldCostPerG: jobFields.goldCostPerG === null ? null : Number(Number(jobFields.goldCostPerG).toFixed(2)) } : {}),
                     ...(jobFields.stoneCost !== undefined ? { stoneCost: (0, jobCostingSchema_1.parseStoneCost)(jobFields.stoneCost) } : {}),
-                    laborCost: goldRestoreSnapshot ? jobFields.laborCost : (0, jobCostingSchema_1.calculateLaborCost)(job.inquiry?.quotedPrice ?? job.sales?.price),
+                    ...(laborCost !== undefined ? { laborCost } : {}),
                     ...(jobFields.laborCharge !== undefined ? { laborCharge: jobFields.laborCharge } : {}),
                     ...(jobFields.otherCost !== undefined ? { otherCost: jobFields.otherCost } : {}),
                     ...(jobFields.itemName !== undefined ? { itemName: jobFields.itemName } : {}),
