@@ -1,3 +1,4 @@
+import { validateJobStaff } from './lib/jobStaff';
 import { fieldLabel } from "./lib/readableError";
 import { calculateLaborCost, parseStoneCost } from './lib/jobCostingSchema';
 import { serviceRules, validateServiceFields, stripDisallowedFields, ServiceType } from './lib/serviceRules';
@@ -74,7 +75,7 @@ function normalizedChanges(body: Record<string, unknown>, spec: Spec, serviceTyp
     }
     if (raw === undefined) continue;
     if (spec.entity === 'INVENTORY' && key === 'unitPrice' && raw === null) { changes[key] = null; continue; }
-    if (spec.entity === 'JOB_COST' && serviceType === 'Custom' && key === 'laborCost') continue;
+    if (spec.entity === 'JOB_COST' && key === 'laborCost') continue;
     if (spec.entity === 'JOB_COST' && key === 'stoneCost') { changes[key] = parseStoneCost(raw); continue; }
     if (raw === null && Object.hasOwn(notApplicable, key)) { changes[key] = null; continue; }
     if (spec.entity === 'JOB_COST' && ['goldUsed', 'goldScrap'].includes(key)) {
@@ -135,7 +136,10 @@ export async function queueStaffChanges(req: Request, res: Response, next: NextF
       try {
         const type = spec.entity === 'JOB_COST' ? current.serviceType as ServiceType : undefined;
         const payload = type ? stripDisallowedFields(type, req.body ?? {}) : req.body ?? {};
-        if (spec.entity === 'JOB_COST') validateServiceFields(type, req.body ?? {});
+        if (spec.entity === 'JOB_COST') {
+          validateServiceFields(type, req.body ?? {});
+          await validateJobStaff(prisma, payload.empId, current.empId ?? null);
+        }
         proposedData = normalizedChanges(type ? { ...payload, goldSourceId: payload.goldSourceId === undefined ? current.goldSourceId : payload.goldSourceId } : payload, spec, type);
       }
       catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
@@ -199,10 +203,10 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
       const payload = goldRestoreSnapshot ? changes : stripDisallowedFields(job.serviceType as ServiceType, changes);
       const rules = goldRestoreSnapshot ? serviceRules(job.serviceType) : validateServiceFields(job.serviceType, changes);
       const { sellingPrice, ...jobFields } = payload;
-      let laborCost = jobFields.laborCost as number | null | undefined;
-      if (!goldRestoreSnapshot && job.serviceType === 'Custom') {
-        laborCost = calculateLaborCost(job.inquiry?.quotedPrice ?? job.sales?.price);
-      }
+      if (!goldRestoreSnapshot) await validateJobStaff(tx, jobFields.empId, job.empId ?? null);
+      const laborCost = goldRestoreSnapshot
+        ? goldRestoreSnapshot.laborCost as number | null | undefined
+        : calculateLaborCost(job.inquiry?.quotedPrice ?? sellingPrice ?? job.sales?.price);
       await tx.job_Cost.update({ where: { jobCostId: id }, data: {
         ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed === null ? null : goldWeight(jobFields.goldUsed) } : {}),
         ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap === null ? null : goldWeight(jobFields.goldScrap) } : {}),
@@ -213,7 +217,7 @@ async function applyUpdate(tx: Prisma.TransactionClient, request: any, changes: 
         ...(jobFields.otherCost !== undefined ? { otherCost: jobFields.otherCost as number } : {}),
         ...(jobFields.itemName !== undefined ? { itemName: jobFields.itemName as string | null } : {}),
         ...(jobFields.deadline !== undefined || jobFields.deliveryDate !== undefined ? { deadline: date('deadline') ?? date('deliveryDate') } : {}),
-        ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
+        ...(typeof jobFields.empId === 'string' || (goldRestoreSnapshot && jobFields.empId === null) ? { empId: jobFields.empId } : {}),
       } });
       if (goldRestoreSnapshot && Array.isArray(goldRestoreSnapshot.inventoryMovement)) {
         await tx.inventory.updateMany({ where: { jobCostId: id, category: { not: 'SCRAP' } }, data: { deletedAt: new Date() } });
@@ -339,6 +343,7 @@ async function undoApprovedRequest(tx: Prisma.TransactionClient, request: any): 
   if (request.action === 'UPDATE') {
     const proposed = (request.proposedData ?? {}) as Record<string, unknown>;
     const restore = Object.fromEntries(Object.keys(proposed).map(key => [key, Object.hasOwn(before, key) ? before[key] : before.client?.[key]]));
+    if (request.entityType === 'JOB_COST' && Object.hasOwn(proposed, 'sellingPrice') && before.sales) restore.sellingPrice = before.sales.price;
     await applyUpdate(tx, { ...request, proposedData: restore }, restore, request.entityType === 'JOB_COST' ? before : undefined);
     return;
   }

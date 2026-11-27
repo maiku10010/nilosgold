@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const jobStaff_1 = require("../lib/jobStaff");
 const jobCostingSchema_1 = require("../lib/jobCostingSchema");
 const serviceRules_1 = require("../lib/serviceRules");
 const rounding_1 = require("../rounding");
@@ -19,7 +20,11 @@ const includeJob = {
     inquiry: true,
     sales: { include: { client: true, payments: true } },
 };
-const withJobSaleTotals = (job) => job.sales ? { ...job, sales: (0, accounting_1.withSaleTotals)(job.sales) } : job;
+const withJobSaleTotals = (job) => {
+    const quote = job.inquiry?.quotedPrice ?? job.sales?.price;
+    return { ...job, laborCost: quote == null ? job.laborCost : (0, jobCostingSchema_1.calculateLaborCost)(quote),
+        ...(job.sales ? { sales: (0, accounting_1.withSaleTotals)(job.sales) } : {}) };
+};
 router.post('/', async (req, res) => {
     try {
         const { inquiryId, clientName, contactNum, empId, serviceType: requestedServiceType, itemName, deadline, deliveryDate } = req.body;
@@ -50,7 +55,7 @@ router.post('/', async (req, res) => {
             const goldScrap = (0, goldAllocation_1.goldWeight)(payload.goldScrap ?? 0);
             const goldCostPerG = (0, rounding_1.roundTwo)(payload.goldCostPerG ?? 0);
             const stoneCost = (0, jobCostingSchema_1.parseStoneCost)(payload.stoneCost);
-            const laborCost = serviceType === 'Custom' ? (0, jobCostingSchema_1.calculateLaborCost)(inquiry.quotedPrice) : (0, rounding_1.roundTwo)(payload.laborCost ?? 0);
+            const laborCost = (0, jobCostingSchema_1.calculateLaborCost)(inquiry.quotedPrice);
             const laborCharge = (0, rounding_1.roundTwo)(payload.laborCharge ?? 0);
             const otherCost = (0, rounding_1.roundTwo)(payload.otherCost ?? 0);
             const sellingPrice = (0, rounding_1.roundTwo)(payload.sellingPrice);
@@ -64,11 +69,7 @@ router.post('/', async (req, res) => {
             if (inquiry.customerName.trim().toLocaleLowerCase() !== clientName.trim().toLocaleLowerCase()) {
                 throw Object.assign(new Error('The client name must match the selected inquiry.'), { statusCode: 400 });
             }
-            const employee = empId
-                ? await tx.employee.findFirst({ where: { empId, deletedAt: null }, select: { empId: true } })
-                : await tx.employee.findFirst({ where: { deletedAt: null }, select: { empId: true } });
-            if (!employee)
-                throw Object.assign(new Error('Assign an existing employee before approving job costing.'), { statusCode: 409 });
+            await (0, jobStaff_1.validateJobStaff)(tx, empId);
             let client = inquiry.client;
             const normalizedContact = typeof contactNum === 'string' && contactNum.trim() ? contactNum.trim() : null;
             if (!client) {
@@ -104,7 +105,7 @@ router.post('/', async (req, res) => {
                     laborCharge: rules.labor ? laborCharge : null,
                     otherCost,
                     status: 'PENDING',
-                    employee: { connect: { empId: employee.empId } },
+                    employee: { connect: { empId } },
                     client: { connect: { clientId: client.clientId } },
                     inquiry: { connect: { inquiryId } },
                 },
@@ -145,6 +146,14 @@ router.post('/', async (req, res) => {
         console.error('Error creating job costing:', error);
         res.status(500).json({ error: 'Job costing could not be saved.' });
     }
+});
+router.get('/staff', async (_req, res) => {
+    const staff = await db_1.prisma.employee.findMany({
+        where: jobStaff_1.activeJobStaff,
+        select: includeJob.employee.select,
+        orderBy: [{ empName: 'asc' }, { empId: 'asc' }],
+    });
+    res.json(staff);
 });
 router.get('/', async (_req, res) => {
     try {
@@ -225,19 +234,18 @@ router.put('/:jobCostId', async (req, res) => {
                 throw Object.assign(new Error('Job costing record not found.'), { statusCode: 404 });
             if (!existing.sales)
                 throw Object.assign(new Error('This costing has no linked invoice.'), { statusCode: 409 });
+            await (0, jobStaff_1.validateJobStaff)(tx, req.body.empId, existing.empId ?? null);
             const payload = (0, serviceRules_1.stripDisallowedFields)(existing.serviceType, req.body);
             const rules = (0, serviceRules_1.validateServiceFields)(existing.serviceType, req.body);
             const goldUsed = (0, goldAllocation_1.goldWeight)(payload.goldUsed);
             const goldScrap = (0, goldAllocation_1.goldWeight)(payload.goldScrap ?? 0);
             const goldCostPerG = (0, rounding_1.roundTwo)(payload.goldCostPerG ?? 0);
             const stoneCost = (0, jobCostingSchema_1.parseStoneCost)(payload.stoneCost);
-            const laborCost = existing.serviceType === 'Custom'
-                ? (0, jobCostingSchema_1.calculateLaborCost)(existing.inquiry?.quotedPrice ?? existing.sales.price)
-                : payload.laborCost === undefined ? undefined : (0, rounding_1.roundTwo)(payload.laborCost ?? 0);
             const laborCharge = (0, rounding_1.roundTwo)(payload.laborCharge ?? 0);
             const otherCost = (0, rounding_1.roundTwo)(payload.otherCost ?? 0);
             const sellingPrice = (0, rounding_1.roundTwo)(payload.sellingPrice);
-            if (![stoneCost ?? 0, laborCost ?? 0, laborCharge, otherCost].every(validation_1.isNonNegativeNumber) || !(0, validation_1.isNonNegativeNumber)(goldCostPerG) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
+            const laborCost = (0, jobCostingSchema_1.calculateLaborCost)(existing.inquiry?.quotedPrice ?? sellingPrice);
+            if (![stoneCost ?? 0, laborCost, laborCharge, otherCost].every(validation_1.isNonNegativeNumber) || !(0, validation_1.isNonNegativeNumber)(goldCostPerG) || !(0, validation_1.isPositiveNumber)(sellingPrice)) {
                 throw Object.assign(new Error('Enter non-negative costs, a gold price per gram, and a selling price greater than zero.'), { statusCode: 400 });
             }
             if (rules.gold && payload.goldSourceId !== 'CUSTOMER_GOLD' && (existing.serviceType === 'Custom' || !!payload.goldSourceId) && !(0, validation_1.isPositiveNumber)(goldCostPerG))
@@ -251,11 +259,6 @@ router.put('/:jobCostId', async (req, res) => {
             if (existing.sales.invoiceId !== req.body.invoiceId || !namesMatch) {
                 throw Object.assign(new Error('The client name and invoice number must match this costing.'), { statusCode: 409 });
             }
-            if (req.body.empId && req.body.empId !== existing.empId) {
-                const employee = await tx.employee.findFirst({ where: { empId: req.body.empId, deletedAt: null }, select: { empId: true } });
-                if (!employee)
-                    throw Object.assign(new Error('Choose an existing employee.'), { statusCode: 400 });
-            }
             await tx.job_Cost.update({
                 where: { jobCostId },
                 data: {
@@ -263,7 +266,7 @@ router.put('/:jobCostId', async (req, res) => {
                     goldScrap: rules.scrap ? goldScrap : null,
                     goldCostPerG: rules.gold ? goldCostPerG : null,
                     stoneCost: rules.stone ? stoneCost : null,
-                    ...(laborCost !== undefined ? { laborCost: rules.labor ? laborCost : null } : {}),
+                    laborCost: rules.labor ? laborCost : null,
                     laborCharge: rules.labor ? laborCharge : null,
                     otherCost,
                     ...(req.body.itemName !== undefined ? { itemName: typeof req.body.itemName === 'string' && req.body.itemName.trim() ? req.body.itemName.trim() : null } : {}),

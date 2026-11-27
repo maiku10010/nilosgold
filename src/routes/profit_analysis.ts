@@ -1,3 +1,4 @@
+import { calculateLaborCost } from '../lib/jobCostingSchema';
 import { serviceCost } from '../serviceCost';
 import { Request, Response, Router } from 'express';
 import { prisma } from '../db';
@@ -13,14 +14,16 @@ router.get('/', async (req: Request, res: Response) => {
   }
   try {
     const [sales, expenses, inquiries] = await Promise.all([
-      prisma.sales.findMany({ where: { deletedAt: null, salesDate: { gte: start, lte: end }, status: { in: ['FINISHED', 'PAID', 'PARTIAL'] } }, include: { job: true } }),
+      prisma.sales.findMany({ where: { deletedAt: null, salesDate: { gte: start, lte: end }, status: { in: ['FINISHED', 'PAID', 'PARTIAL'] } }, include: { job: { include: { inquiry: { select: { quotedPrice: true } } } } } }),
       prisma.expenses.aggregate({ where: { deletedAt: null, expDate: { gte: start, lte: end } }, _sum: { amount: true } }),
       prisma.inquiries.count({ where: { deletedAt: null, inqDate: { gte: start, lte: end } } }),
     ]);
     const revenue = sales.reduce((sum, sale) => sum + Number(sale.price), 0);
     const jobCost = sales.reduce((sum, sale) => {
       if (!sale.job || sale.job.deletedAt) return sum;
-      return sum + serviceCost(sale.job.serviceType, sale.job).toNumber();
+      const quote = sale.job.inquiry?.quotedPrice ?? sale.price;
+      const laborCost = quote == null ? sale.job.laborCost : calculateLaborCost(quote);
+      return sum + serviceCost(sale.job.serviceType, { ...sale.job, laborCost }).toNumber();
     }, 0);
     const operatingExpenses = Number(expenses._sum.amount ?? 0);
     res.json({ start: start.toISOString(), end: end.toISOString(), revenue, jobCost, grossProfit: revenue - jobCost, expenses: operatingExpenses, netProfit: revenue - jobCost - operatingExpenses, netMargin: revenue ? ((revenue - jobCost - operatingExpenses) / revenue) * 100 : 0, inquiries, salesCount: sales.length });

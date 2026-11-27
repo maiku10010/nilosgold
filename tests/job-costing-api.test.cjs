@@ -32,6 +32,13 @@ function database() {
   const client = { clientId: 'CLIENT-1', clientName: 'Mia', email: null };
   const write = () => { assert.equal(state.inTransaction, true, 'all writes must occur inside the costing transaction'); state.writes++; };
   const jobWithRelations = job => job && ({ ...job, inquiry: state.inquiries.find(row => row.inquiryId === job.inquiryId), sales: (() => { const invoice = state.invoices.find(row => row.jobCostId === job.jobCostId); return invoice ? { ...invoice, client, payments: [] } : null; })() });
+  const staff = [
+    { empId: 'EMP-1', empName: 'Aria', empRole: 'Staff', deletedAt: null },
+    { empId: 'ADMIN', empName: 'Bea', empRole: 'Admin', deletedAt: null },
+    { empId: 'OLD', empName: 'Cleo', empRole: 'Staff', deletedAt: new Date() },
+    { empId: 'OTHER', empName: 'Dax', empRole: 'Other', deletedAt: null },
+  ];
+  state.staff = staff;
   const tx = {
     inventory: {
       findFirst: async ({ where }) => state.inventory.find(row => matches(row, where)) ?? null,
@@ -44,10 +51,15 @@ function database() {
       findFirst: async ({ where }) => { const row = state.inquiries.find(row => matches(row, where)); return row ? { ...row, client, jobCost: state.jobs.find(job => job.inquiryId === row.inquiryId) ?? null } : null; },
       update: async ({ where, data }) => { write(); const row = state.inquiries.find(row => matches(row, where)); Object.assign(row, data); return row; },
     },
-    employee: { findFirst: async () => ({ empId: 'EMP-1' }) },
+    employee: {
+      findFirst: async ({ where }) => staff.find(row => matches(row, where)) ?? null,
+      findMany: async ({ where, select }) => staff.filter(row => matches(row, where)).map(row =>
+        Object.fromEntries(Object.keys(select).map(key => [key, row[key]]))),
+    },
     job_Cost: {
-      create: async ({ data }) => { write(); const row = { deletedAt: null, goldKarat: null, ...data, inquiryId: data.inquiry.connect.inquiryId, empId: 'EMP-1', clientId: client.clientId }; state.jobs.push(row); return row; },
+      create: async ({ data }) => { write(); const row = { deletedAt: null, goldKarat: null, ...data, inquiryId: data.inquiry.connect.inquiryId, empId: data.employee.connect.empId, clientId: client.clientId }; state.jobs.push(row); return row; },
       findFirst: async ({ where }) => jobWithRelations(state.jobs.find(row => matches(row, where))) ?? null,
+      findMany: async ({ where }) => state.jobs.filter(row => matches(row, where)).map(jobWithRelations),
       findUniqueOrThrow: async ({ where }) => { const job = state.jobs.find(row => matches(row, where)); assert.ok(job); return jobWithRelations(job); },
       update: async ({ where, data }) => { write(); const row = state.jobs.find(row => matches(row, where)); Object.assign(row, data); return row; },
     },
@@ -64,7 +76,7 @@ function database() {
   } });
   return state;
 }
-const body = (overrides = {}) => ({ inquiryId: 'INQ-1', clientName: 'Mia', serviceType: 'Custom', goldSourceId: 'GOLD-18K', goldUsed: '1', goldScrap: '0', goldCostPerG: 8000, laborCost: 1000, sellingPrice: 15000, ...overrides });
+const body = (overrides = {}) => ({ inquiryId: 'INQ-1', empId: 'EMP-1', clientName: 'Mia', serviceType: 'Custom', goldSourceId: 'GOLD-18K', goldUsed: '1', goldScrap: '0', goldCostPerG: 8000, laborCost: 1000, sellingPrice: 15000, ...overrides });
 async function request(method, path = '', payload) {
   const response = await fetch(baseUrl + path, { method, headers: { 'content-type': 'application/json' }, ...(payload === undefined ? {} : { body: JSON.stringify(payload) }) });
   return { status: response.status, data: await response.json() };
@@ -84,7 +96,7 @@ after(async () => { await new Promise(resolve => server.close(resolve)); });
 beforeEach(() => { fixture = database(); });
 
 test('POST Cleaning with gold used = 2 returns 400 without writing anything', async () => {
-  const result = await request('POST', '', { inquiryId: 'INQ-1', clientName: 'Mia', serviceType: 'Cleaning', goldUsed: 2, laborCost: 1000, sellingPrice: 1500 });
+  const result = await request('POST', '', { inquiryId: 'INQ-1', empId: 'EMP-1', clientName: 'Mia', serviceType: 'Cleaning', goldUsed: 2, laborCost: 1000, sellingPrice: 1500 });
   assert.equal(result.status, 400);
   assert.equal(result.data.field, 'goldUsed');
   assert.equal(fixture.writes, 0);
@@ -160,17 +172,17 @@ test('labor is 30% of the saved quote on create and edit, ignoring submitted lab
 });
 
 for (const serviceType of ['Repair', 'Resize', 'Cleaning']) {
-  test(serviceType + ' can be costed without a gold source or manual labor', async () => {
-    const created = await request('POST', '', { inquiryId: 'INQ-1', clientName: 'Mia', serviceType, sellingPrice: 15000 });
+  test(serviceType + ' can be costed without a gold source and always calculates labor', async () => {
+    const created = await request('POST', '', { inquiryId: 'INQ-1', empId: 'EMP-1', clientName: 'Mia', serviceType, sellingPrice: 15000 });
     assert.equal(created.status, 201);
-    assert.equal(Number(created.data.laborCost), 0);
+    assert.equal(Number(created.data.laborCost), 4500);
     const editBody = { invoiceId: created.data.sales.invoiceId, clientName: 'Mia', sellingPrice: 15000 };
     const edited = await request('PUT', '/' + created.data.jobCostId, { ...editBody, laborCost: 1200 });
     assert.equal(edited.status, 200);
-    assert.equal(Number(edited.data.laborCost), 1200);
+    assert.equal(Number(edited.data.laborCost), 4500);
     const unchanged = await request('PUT', '/' + created.data.jobCostId, editBody);
     assert.equal(unchanged.status, 200);
-    assert.equal(Number(unchanged.data.laborCost), 1200);
+    assert.equal(Number(unchanged.data.laborCost), 4500);
     assert.equal(created.data.goldKarat, null);
     assert.equal(balance('GOLD'), '1.2');
   });
@@ -208,4 +220,42 @@ test('HTTP costing accepts silver, checks its stock, and edits back to gold with
   assert.equal(edited.status, 200, JSON.stringify(edited.data));
   assert.equal(balance('SILVER'), '2');
   assert.equal(balance('GOLD'), '0.7');
+});
+
+test('staff directory exposes active staff and admins, and validates assignments', async () => {
+  const directory = await request('GET', '/staff');
+  assert.deepEqual(directory.data, [
+    { empId: 'EMP-1', empName: 'Aria', empRole: 'Staff' },
+    { empId: 'ADMIN', empName: 'Bea', empRole: 'Admin' },
+  ]);
+  for (const empId of [undefined, '', 'OLD', 'OTHER', 'missing']) {
+    const rejected = await request('POST', '', body({ empId }));
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.data.field, 'empId');
+  }
+  const created = await request('POST', '', body({ empId: 'ADMIN' }));
+  assert.equal(created.status, 201);
+  assert.equal(created.data.empId, 'ADMIN');
+  const path = '/' + created.data.jobCostId;
+  const edit = { invoiceId: created.data.sales.invoiceId, clientName: 'Mia', goldSourceId: 'GOLD-18K', goldUsed: '1', goldCostPerG: 8000, sellingPrice: 15000 };
+  fixture.staff.find(person => person.empId === 'ADMIN').deletedAt = new Date();
+  const preserved = await request('PUT', path, { ...edit, empId: 'ADMIN' });
+  assert.equal(preserved.status, 200);
+  assert.equal(preserved.data.empId, 'ADMIN');
+  assert.equal((await request('PUT', path, { ...edit, empId: 'OLD' })).status, 400);
+  const reassigned = await request('PUT', path, { ...edit, empId: 'EMP-1' });
+  assert.equal(reassigned.status, 200);
+  assert.equal(reassigned.data.empId, 'EMP-1');
+});
+
+test('historical job reads recalculate labor from the quote or linked invoice', async () => {
+  const created = await request('POST', '', body({ serviceType: 'Cleaning', goldSourceId: null, goldUsed: null, goldCostPerG: null, goldScrap: null }));
+  assert.equal(created.status, 201);
+  fixture.jobs[0].laborCost = 800;
+  assert.equal((await request('GET')).data[0].laborCost, 4500);
+  fixture.jobs[0].inquiryId = null;
+  const edited = await request('PUT', '/' + created.data.jobCostId, { invoiceId: created.data.sales.invoiceId, clientName: 'Mia', sellingPrice: 20000 });
+  assert.equal(edited.status, 200);
+  assert.equal(fixture.jobs[0].laborCost, 6000);
+  assert.equal((await request('GET')).data[0].laborCost, 6000);
 });

@@ -7,7 +7,7 @@ const { calculateInventoryBalances } = require('../dist/inventoryLedger');
 const source = (data = {}) => ({ referenceId: '18K-IN', category: 'GOLD', goldKarat: 18, itemName: 'Gold · 18K', unit: 'grams', quantityIn: new Prisma.Decimal('1.2'), quantityOut: new Prisma.Decimal(0), quantityLoss: new Prisma.Decimal(0), deletedAt: null, jobCostId: null, ...data });
 const categoryMatches = (row, category) => !category || (typeof category === 'string' ? row.category === category : category.not ? row.category !== category.not : category.in.includes(row.category));
 function database(rows) {
-  const job = { jobCostId: 'JOB-1', serviceType: 'Repair', goldKarat: 18, goldUsed: '0', goldScrap: '0', goldCostPerG: 8000, universalReferenceId: 'REF-1', deletedAt: null, sales: { invoiceId: 'INV-1', serviceType: 'Repair', price: 15000, payments: [] } };
+  const job = { jobCostId: 'JOB-1', empId: 'E', serviceType: 'Repair', goldKarat: 18, goldUsed: '0', goldScrap: '0', goldCostPerG: 8000, universalReferenceId: 'REF-1', deletedAt: null, sales: { invoiceId: 'INV-1', serviceType: 'Repair', price: 15000, payments: [] } };
   return {
     rows, job,
     inventory: {
@@ -169,7 +169,7 @@ test('the costing create route deducts the required gold source and persists its
   const create = router.stack.find(layer => layer.route?.path === '/' && layer.route?.methods.post).route.stack[0].handle;
   const result = response(); result.locals = {};
   await create({ body: {
-    inquiryId: 'INQ-1', clientName: 'Mia', serviceType: 'Repair', goldSourceId: '18K-IN',
+    inquiryId: 'INQ-1', empId: 'E', clientName: 'Mia', serviceType: 'Repair', goldSourceId: '18K-IN',
     goldUsed: '1', goldScrap: '0.2', goldCostPerG: 8000, stoneCost: 0, laborCost: 1000, sellingPrice: 15000,
   } }, result);
   assert.equal(result.statusCode, 201);
@@ -247,7 +247,7 @@ test('costing API rejects disabled fields with 400 and permits labor-only Cleani
   prisma.sales = { create: async ({ data }) => data };
   const router = require('../dist/routes/job_costing').default;
   const create = router.stack.find(layer => layer.route?.path === '/' && layer.route?.methods.post).route.stack[0].handle;
-  const base = { inquiryId: 'INQ-1', clientName: 'Mia', serviceType: 'Cleaning', goldUsed: null, goldScrap: null, goldSourceId: null, goldCostPerG: null, stoneCost: null, laborCost: 1000, sellingPrice: 1500 };
+  const base = { inquiryId: 'INQ-1', empId: 'E', clientName: 'Mia', serviceType: 'Cleaning', goldUsed: null, goldScrap: null, goldSourceId: null, goldCostPerG: null, stoneCost: null, laborCost: 1000, sellingPrice: 1500 };
   for (const fields of [{ goldUsed: 1 }, { goldSourceId: '18K-IN' }, { goldScrap: '.2' }, { stoneCost: 0 }]) {
     const result = response(); result.locals = {};
     await create({ body: { ...base, ...fields } }, result);
@@ -308,7 +308,7 @@ test('staff and direct edits validate the stored service type rather than a spoo
 });
 
 
-test('direct Resize edits store stone cost as null and preserve measured-zero labor and scrap', async () => {
+test('direct Resize edits compute labor and preserve null stone and measured-zero scrap', async () => {
   const tx = database([source()]);
   tx.job.serviceType = 'Resize';
   tx.job.sales = { ...tx.job.sales, serviceType: 'Resize', client: { clientName: 'Mia' } };
@@ -322,7 +322,7 @@ test('direct Resize edits store stone cost as null and preserve measured-zero la
   await edit({ params: { jobCostId: 'JOB-1' }, body: { invoiceId: 'INV-1', clientName: 'Mia', goldSourceId: '18K-IN', goldUsed: '1', goldScrap: '0', goldCostPerG: 8000, stoneCost: null, laborCost: 0, sellingPrice: 15000 } }, result);
   assert.equal(result.statusCode, 200);
   assert.equal(result.body.stoneCost, null);
-  assert.equal(result.body.laborCost, 0);
+  assert.equal(result.body.laborCost, 4500);
   assert.equal(result.body.goldScrap.toString(), '0');
 });
 
@@ -341,13 +341,17 @@ test('Cleaning staff edits retain nulls through approval and undo and reject for
   prisma.systemLog = { create: async () => ({}) };
   prisma.$transaction = async fn => fn(prisma);
   const staff = { empId: 'STAFF', empRole: 'Staff' };
+  prisma.employee = { findFirst: async ({ where }) => where.empId === 'ADMIN' ? { empId: 'ADMIN' } : null };
+  const invalidStaff = response();
+  await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: staff, body: { empId: 'MISSING' } }, invalidStaff, () => assert.fail('must reject'));
+  assert.equal(invalidStaff.statusCode, 400);
   for (const value of [0, '0', 100, '']) {
     const rejected = response();
     await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: staff, body: { stoneCost: value } }, rejected, () => assert.fail('must reject'));
     assert.equal(rejected.statusCode, 400);
   }
   const pending = response();
-  await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: staff, body: { goldUsed: null, goldScrap: null, goldCostPerG: null, goldSourceId: null, stoneCost: null, laborCost: 1200 } }, pending, () => assert.fail('must queue'));
+  await approvals.queueStaffChanges({ method: 'PUT', path: '/job-cost/JOB-1', user: staff, body: { goldUsed: null, goldScrap: null, goldCostPerG: null, goldSourceId: null, stoneCost: null, laborCost: 1200, empId: 'ADMIN' } }, pending, () => assert.fail('must queue'));
   assert.equal(pending.statusCode, 202);
   assert.equal(queued.proposedData.goldCostPerG, null);
   assert.equal(queued.proposedData.stoneCost, null);
@@ -355,12 +359,15 @@ test('Cleaning staff edits retain nulls through approval and undo and reject for
   const approved = response();
   await approve({ params: { requestId: 'APP-NULL' }, body: {}, user }, approved);
   assert.equal(approved.statusCode, 200);
-  assert.equal(tx.job.laborCost, 1200);
+  assert.equal(tx.job.laborCost, 4500);
+  assert.equal(tx.job.empId, 'ADMIN');
+  assert.equal(queued.proposedData.laborCost, undefined);
   for (const key of ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost']) assert.equal(tx.job[key], null);
   const restored = response();
   await undo({ params: { requestId: 'APP-NULL' }, user }, restored);
   assert.equal(restored.statusCode, 200);
   assert.equal(tx.job.laborCost, 1000);
+  assert.equal(tx.job.empId, 'E');
   for (const key of ['goldUsed', 'goldScrap', 'goldCostPerG', 'stoneCost']) assert.equal(tx.job[key], null);
 });
 
@@ -378,7 +385,7 @@ test('Repair and Custom creates preserve omitted/null stone costs and explicitly
       prisma.job_Cost.findUniqueOrThrow = async () => tx.job;
       prisma.sales = { create: async ({ data }) => data };
       const result = response(); result.locals = {};
-      await create({ body: { inquiryId: 'INQ-1', clientName: 'Mia', serviceType: type, goldSourceId: '18K-IN', goldUsed: '.5', goldScrap: 0, goldCostPerG: 8000, laborCost: 1000, sellingPrice: 15000, ...(stoneCost === undefined ? {} : { stoneCost }) } }, result);
+      await create({ body: { inquiryId: 'INQ-1', empId: 'E', clientName: 'Mia', serviceType: type, goldSourceId: '18K-IN', goldUsed: '.5', goldScrap: 0, goldCostPerG: 8000, laborCost: 1000, sellingPrice: 15000, ...(stoneCost === undefined ? {} : { stoneCost }) } }, result);
       assert.equal(result.statusCode, 201);
       assert.equal(result.body.stoneCost, stoneCost ?? null);
     }
@@ -452,7 +459,7 @@ test('costing inherits the original inquiry service type and audits only an actu
     prisma.sales = { create: async ({ data }) => { invoiceType = data.serviceType; return data; } };
     prisma.systemLog = { create: async ({ data }) => { assert.equal(inTransaction, true); logs.push(data); return data; } };
     const effective = chosen ?? original;
-    const body = { inquiryId: 'INQ-1', clientName: 'Mia', laborCost: 1000, sellingPrice: 15000,
+    const body = { inquiryId: 'INQ-1', empId: 'E', clientName: 'Mia', laborCost: 1000, sellingPrice: 15000,
       ...(chosen ? { serviceType: chosen } : {}),
       ...(effective === 'Cleaning' ? {} : { goldSourceId: '18K-IN', goldUsed: '.5', goldCostPerG: 8000 }),
     };

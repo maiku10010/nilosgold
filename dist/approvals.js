@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.queueStaffChanges = queueStaffChanges;
+const jobStaff_1 = require("./lib/jobStaff");
 const readableError_1 = require("./lib/readableError");
 const jobCostingSchema_1 = require("./lib/jobCostingSchema");
 const serviceRules_1 = require("./lib/serviceRules");
@@ -74,7 +75,7 @@ function normalizedChanges(body, spec, serviceType) {
             changes[key] = null;
             continue;
         }
-        if (spec.entity === 'JOB_COST' && serviceType === 'Custom' && key === 'laborCost')
+        if (spec.entity === 'JOB_COST' && key === 'laborCost')
             continue;
         if (spec.entity === 'JOB_COST' && key === 'stoneCost') {
             changes[key] = (0, jobCostingSchema_1.parseStoneCost)(raw);
@@ -177,8 +178,10 @@ async function queueStaffChanges(req, res, next) {
             try {
                 const type = spec.entity === 'JOB_COST' ? current.serviceType : undefined;
                 const payload = type ? (0, serviceRules_1.stripDisallowedFields)(type, req.body ?? {}) : req.body ?? {};
-                if (spec.entity === 'JOB_COST')
+                if (spec.entity === 'JOB_COST') {
                     (0, serviceRules_1.validateServiceFields)(type, req.body ?? {});
+                    await (0, jobStaff_1.validateJobStaff)(db_1.prisma, payload.empId, current.empId ?? null);
+                }
                 proposedData = normalizedChanges(type ? { ...payload, goldSourceId: payload.goldSourceId === undefined ? current.goldSourceId : payload.goldSourceId } : payload, spec, type);
             }
             catch (error) {
@@ -265,10 +268,11 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
             const payload = goldRestoreSnapshot ? changes : (0, serviceRules_1.stripDisallowedFields)(job.serviceType, changes);
             const rules = goldRestoreSnapshot ? (0, serviceRules_1.serviceRules)(job.serviceType) : (0, serviceRules_1.validateServiceFields)(job.serviceType, changes);
             const { sellingPrice, ...jobFields } = payload;
-            let laborCost = jobFields.laborCost;
-            if (!goldRestoreSnapshot && job.serviceType === 'Custom') {
-                laborCost = (0, jobCostingSchema_1.calculateLaborCost)(job.inquiry?.quotedPrice ?? job.sales?.price);
-            }
+            if (!goldRestoreSnapshot)
+                await (0, jobStaff_1.validateJobStaff)(tx, jobFields.empId, job.empId ?? null);
+            const laborCost = goldRestoreSnapshot
+                ? goldRestoreSnapshot.laborCost
+                : (0, jobCostingSchema_1.calculateLaborCost)(job.inquiry?.quotedPrice ?? sellingPrice ?? job.sales?.price);
             await tx.job_Cost.update({ where: { jobCostId: id }, data: {
                     ...(jobFields.goldUsed !== undefined ? { goldUsed: jobFields.goldUsed === null ? null : (0, goldAllocation_1.goldWeight)(jobFields.goldUsed) } : {}),
                     ...(jobFields.goldScrap !== undefined ? { goldScrap: jobFields.goldScrap === null ? null : (0, goldAllocation_1.goldWeight)(jobFields.goldScrap) } : {}),
@@ -279,7 +283,7 @@ async function applyUpdate(tx, request, changes, goldRestoreSnapshot) {
                     ...(jobFields.otherCost !== undefined ? { otherCost: jobFields.otherCost } : {}),
                     ...(jobFields.itemName !== undefined ? { itemName: jobFields.itemName } : {}),
                     ...(jobFields.deadline !== undefined || jobFields.deliveryDate !== undefined ? { deadline: date('deadline') ?? date('deliveryDate') } : {}),
-                    ...(typeof jobFields.empId === 'string' ? { empId: jobFields.empId } : {}),
+                    ...(typeof jobFields.empId === 'string' || (goldRestoreSnapshot && jobFields.empId === null) ? { empId: jobFields.empId } : {}),
                 } });
             if (goldRestoreSnapshot && Array.isArray(goldRestoreSnapshot.inventoryMovement)) {
                 await tx.inventory.updateMany({ where: { jobCostId: id, category: { not: 'SCRAP' } }, data: { deletedAt: new Date() } });
@@ -429,6 +433,8 @@ async function undoApprovedRequest(tx, request) {
     if (request.action === 'UPDATE') {
         const proposed = (request.proposedData ?? {});
         const restore = Object.fromEntries(Object.keys(proposed).map(key => [key, Object.hasOwn(before, key) ? before[key] : before.client?.[key]]));
+        if (request.entityType === 'JOB_COST' && Object.hasOwn(proposed, 'sellingPrice') && before.sales)
+            restore.sellingPrice = before.sales.price;
         await applyUpdate(tx, { ...request, proposedData: restore }, restore, request.entityType === 'JOB_COST' ? before : undefined);
         return;
     }

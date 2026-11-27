@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const jobCostingSchema_1 = require("../lib/jobCostingSchema");
 const serviceCost_1 = require("../serviceCost");
 const express_1 = require("express");
 const db_1 = require("../db");
@@ -15,7 +16,7 @@ router.get('/', async (req, res) => {
     }
     try {
         const [sales, expenses, inquiries] = await Promise.all([
-            db_1.prisma.sales.findMany({ where: { deletedAt: null, salesDate: { gte: start, lte: end }, status: { in: ['FINISHED', 'PAID', 'PARTIAL'] } }, include: { job: true } }),
+            db_1.prisma.sales.findMany({ where: { deletedAt: null, salesDate: { gte: start, lte: end }, status: { in: ['FINISHED', 'PAID', 'PARTIAL'] } }, include: { job: { include: { inquiry: { select: { quotedPrice: true } } } } } }),
             db_1.prisma.expenses.aggregate({ where: { deletedAt: null, expDate: { gte: start, lte: end } }, _sum: { amount: true } }),
             db_1.prisma.inquiries.count({ where: { deletedAt: null, inqDate: { gte: start, lte: end } } }),
         ]);
@@ -23,7 +24,9 @@ router.get('/', async (req, res) => {
         const jobCost = sales.reduce((sum, sale) => {
             if (!sale.job || sale.job.deletedAt)
                 return sum;
-            return sum + (0, serviceCost_1.serviceCost)(sale.job.serviceType, sale.job).toNumber();
+            const quote = sale.job.inquiry?.quotedPrice ?? sale.price;
+            const laborCost = quote == null ? sale.job.laborCost : (0, jobCostingSchema_1.calculateLaborCost)(quote);
+            return sum + (0, serviceCost_1.serviceCost)(sale.job.serviceType, { ...sale.job, laborCost }).toNumber();
         }, 0);
         const operatingExpenses = Number(expenses._sum.amount ?? 0);
         res.json({ start: start.toISOString(), end: end.toISOString(), revenue, jobCost, grossProfit: revenue - jobCost, expenses: operatingExpenses, netProfit: revenue - jobCost - operatingExpenses, netMargin: revenue ? ((revenue - jobCost - operatingExpenses) / revenue) * 100 : 0, inquiries, salesCount: sales.length });
